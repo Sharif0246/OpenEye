@@ -1809,20 +1809,18 @@ const NAV_CONTROLLER = (() => {
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  AVIATION_MODULE  —  v4.2  OPENSKY AUTHENTICATED REST       ║
-// ║  Uses HTTP Basic Auth to get your personal quota            ║
-// ║  Anonymous = shared IP = 429. Auth = your own 400 req/day  ║
+// ║  AVIATION_MODULE  —  v5  ADSB.LOL + RAPIDAPI + OPENSKY     ║
+// ║  Primary : ADSB.lol (free, open CORS, 5000+ flights)        ║
+// ║  Backup  : ADS-B Exchange RapidAPI (your key)               ║
+// ║  Last    : OpenSky anonymous (120s interval, respects limit) ║
+// ║  Render  : PointPrimitiveCollection (GPU-direct, fast)       ║
 // ╚══════════════════════════════════════════════════════════════╝
 const AVIATION_MODULE = (() => {
 
-  // Your OpenSky account — gives dedicated quota, stops 429 errors.
-  // Password is transmitted only over HTTPS to opensky-network.org.
-  // Set OPENSKY_PASS to your actual password to enable auth mode.
-  const OPENSKY_USER = 'sharifopeneye';
-  const OPENSKY_PASS = 'Sharifopeneye0246';
+  const RAPIDAPI_KEY  = '70603dc003msh9b3a27ff6cf425ap1453e0jsn51f9f2226e66';
+  const RAPIDAPI_HOST = 'adsbexchange-com1.p.rapidapi.com';
 
-  const _hasAuth = () => OPENSKY_PASS.length > 4 && !OPENSKY_PASS.startsWith('REPLACE');
-
+  // ── Military classification ────────────────────────────────────
   const MIL_PREFIXES=['RCH','CNV','REACH','KNIFE','EVAC','JAKE','USAF','NAVY','ARMY','VENUS',
     'IRON','DUKE','HAWK','EAGLE','VIPER','CHAOS','SPAR','SAM','GTMO','HOMER','MOOSE','COLT',
     'FATAL','GRIM','REAPER','GHOST','BISON','BOXER','COBRA','DEMON','DRAGON','FALCON','FURY',
@@ -1833,209 +1831,406 @@ const AVIATION_MODULE = (() => {
     'VVAF','RTAF','ROKAF','JASDF','PLAAF','PLANAF','ASY','EXEC'];
   const MIL_HEX=['ae','af','a9f','c0','c1','c2','43c','43d','43e','43f',
     '800','801','76','77','f00','f01','f02','710','711','712','713',
-    '460','461','462','463','464','3a0','3a1','3a2','3a3','3a4','3000','3001',
-    'b00','b01','b02','b03'];
+    '460','461','462','463','464','3a0','3a1','3a2','3a3','3a4',
+    '3000','3001','b00','b01','b02','b03'];
 
-  function _classify(f){
-    const cs=(f.callsign||'').trim().toUpperCase();
-    const hex=(f.icao24||'').toLowerCase();
-    if(!cs||/^[0-9A-F]{4,8}$/.test(cs)) return 'MILITARY';
-    if(MIL_PREFIXES.some(p=>cs.startsWith(p.trim()))) return 'MILITARY';
-    if(MIL_HEX.some(p=>hex.startsWith(p))) return 'MILITARY';
+  function _classify(icao24, callsign) {
+    const cs  = (callsign||'').trim().toUpperCase();
+    const hex = (icao24||'').toLowerCase();
+    if (!cs || /^[0-9A-F]{4,8}$/.test(cs)) return 'MILITARY';
+    if (MIL_PREFIXES.some(p => cs.startsWith(p.trim()))) return 'MILITARY';
+    if (MIL_HEX.some(p => hex.startsWith(p))) return 'MILITARY';
     return 'COMMERCIAL';
   }
 
-  const _iconCache={};
-  function _makeIcon(type,heading){
-    const SZ=40,c=document.createElement('canvas');c.width=c.height=SZ;
+  // ── Parse readsb/ADSB.lol format (used by adsb.lol AND RapidAPI) ──
+  // alt_baro = feet, gs = knots, track = degrees
+  function _parseReadsb(ac) {
+    const lat = ac.lat, lon = ac.lon;
+    if (lat == null || lon == null || !isFinite(lat) || !isFinite(lon)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    const altFt = ac.alt_baro ?? ac.alt_geom ?? null;
+    if (altFt == null || altFt === 'ground' || altFt <= 0) return null;
+    const altM = Math.max(parseFloat(altFt) * 0.3048, 300);
+    const icao24  = (ac.hex || '').toLowerCase().trim();
+    const callsign = (ac.flight || ac.r || icao24).trim();
+    return {
+      icao24, callsign,
+      country: ac.ownOp || ac.r || '?',
+      reg:     ac.r || null,
+      acType:  ac.t || null,
+      lat, lon, altM,
+      altFt:   Math.round(parseFloat(altFt)),
+      velocity: ac.gs != null ? Math.round(ac.gs * 1.852) : null, // kts → km/h
+      heading:  ac.track || 0,
+      vrate:    ac.baro_rate != null ? Math.round(ac.baro_rate * 0.00508) : null, // ft/min → m/s
+      squawk:   ac.squawk || null,
+      emergency: ac.emergency && ac.emergency !== 'none' ? ac.emergency : null,
+      source:   'ADSB',
+      ts:       Date.now(),
+    };
+  }
+
+  // ── Parse OpenSky format ──────────────────────────────────────
+  // alt = meters, velocity = m/s, on_ground filter needed
+  function _parseOpenSky(s) {
+    if (!s || s[8]) return null; // skip on-ground
+    const lon = s[5], lat = s[6];
+    if (lon == null || lat == null || !isFinite(lon) || !isFinite(lat)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    const altM = s[7] ?? s[13] ?? null;
+    if (altM == null || altM <= 0) return null;
+    const icao24   = (s[0] || '').toLowerCase();
+    const callsign = (s[1] || '').trim();
+    return {
+      icao24, callsign, country: s[2] || '?',
+      lat, lon,
+      altM:    Math.max(altM, 300),
+      altFt:   Math.round(altM * 3.28084),
+      velocity: s[9] != null ? Math.round(s[9] * 3.6) : null, // m/s → km/h
+      heading:  s[10] || 0,
+      vrate:    s[11] != null ? Math.round(s[11]) : null,
+      squawk:   s[14] || null,
+      source:   'OpenSky',
+      ts:       Date.now(),
+    };
+  }
+
+  // ── Flight store ──────────────────────────────────────────────
+  const _flights = new Map(); // key → flight data
+  const _milAlerted = new Set();
+
+  // ── Icon cache (Canvas billboards for click-to-select) ────────
+  const _iconCache = {};
+  function _makeIcon(type, heading) {
+    const SZ=40, c=document.createElement('canvas'); c.width=c.height=SZ;
     const ctx=c.getContext('2d');
-    const col=type==='MILITARY'?'#ff9900':'#00ff9d',glow=type==='MILITARY'?'#ff6600':'#00cc77';
-    ctx.save();ctx.translate(SZ/2,SZ/2);ctx.rotate((heading||0)*Math.PI/180);
-    ctx.shadowColor=glow;ctx.shadowBlur=type==='MILITARY'?16:10;ctx.fillStyle=col;
-    if(type==='MILITARY'){
-      ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(10,6);ctx.lineTo(4,4);
-      ctx.lineTo(3,10);ctx.lineTo(0,8);ctx.lineTo(-3,10);ctx.lineTo(-4,4);ctx.lineTo(-10,6);
-      ctx.closePath();ctx.fill();
-      ctx.fillStyle='#ffffff88';ctx.beginPath();ctx.arc(0,-6,1.8,0,Math.PI*2);ctx.fill();
-    }else{
-      ctx.beginPath();ctx.moveTo(0,-14);ctx.lineTo(2,-6);ctx.lineTo(11,1);
-      ctx.lineTo(4,4);ctx.lineTo(3,8);ctx.lineTo(1,7);ctx.lineTo(0,10);
-      ctx.lineTo(-1,7);ctx.lineTo(-3,8);ctx.lineTo(-4,4);ctx.lineTo(-11,1);ctx.lineTo(-2,-6);
-      ctx.closePath();ctx.fill();
+    const col=type==='MILITARY'?'#ff9900':'#00ff9d';
+    const glow=type==='MILITARY'?'#ff6600':'#00cc77';
+    ctx.save(); ctx.translate(SZ/2,SZ/2); ctx.rotate((heading||0)*Math.PI/180);
+    ctx.shadowColor=glow; ctx.shadowBlur=type==='MILITARY'?16:10; ctx.fillStyle=col;
+    if (type==='MILITARY') {
+      ctx.beginPath(); ctx.moveTo(0,-13); ctx.lineTo(10,6); ctx.lineTo(4,4);
+      ctx.lineTo(3,10); ctx.lineTo(0,8); ctx.lineTo(-3,10); ctx.lineTo(-4,4);
+      ctx.lineTo(-10,6); ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#ffffff88'; ctx.beginPath(); ctx.arc(0,-6,1.8,0,Math.PI*2); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.moveTo(0,-14); ctx.lineTo(2,-6); ctx.lineTo(11,1);
+      ctx.lineTo(4,4); ctx.lineTo(3,8); ctx.lineTo(1,7); ctx.lineTo(0,10);
+      ctx.lineTo(-1,7); ctx.lineTo(-3,8); ctx.lineTo(-4,4); ctx.lineTo(-11,1);
+      ctx.lineTo(-2,-6); ctx.closePath(); ctx.fill();
     }
-    ctx.restore();return c;
+    ctx.restore(); return c;
   }
-  function _getIcon(type,heading){
-    const b=Math.round((heading||0)/5)*5,k=`${type}_${b}`;
-    if(!_iconCache[k])_iconCache[k]=_makeIcon(type,b);return _iconCache[k];
-  }
-
-  function _parseState(s){
-    const lon=s[5],lat=s[6];
-    if(lon==null||lat==null||!isFinite(lon)||!isFinite(lat)) return null;
-    if(Math.abs(lat)>90||Math.abs(lon)>180||s[8]) return null;
-    const altM=s[7]!=null?s[7]:(s[13]!=null?s[13]:null);
-    if(altM==null||altM<=0) return null;
-    return{icao24:(s[0]||'').toLowerCase(),callsign:(s[1]||'').trim(),country:s[2]||'?',
-      lon,lat,altM:Math.max(altM,300),altFt:Math.round((altM||300)*3.28084),
-      velocity:s[9]!=null?Math.round(s[9]*3.6):null,heading:s[10]||0,
-      vrate:s[11]!=null?Math.round(s[11]):null,squawk:s[14]||null,source:'OpenSky',ts:Date.now()};
+  function _getIcon(type, heading) {
+    const b=Math.round((heading||0)/5)*5, k=`${type}_${b}`;
+    if (!_iconCache[k]) _iconCache[k]=_makeIcon(type,b); return _iconCache[k];
   }
 
-  const _flights=new Map();
-  const _milAlerted=new Set();
-  let _drTimer=null,_pollTimer=null,_backoffMs=30000;
+  // ── PointPrimitiveCollection — GPU-direct, handles 10k+ objects ──
+  // Used for the bulk of aircraft. Entity fallback for clicked object.
+  let _pointCollection = null;
+  let _billboardCollection = null;
 
-  async function _poll(){
-    const headers={};
-    if(_hasAuth()){
-      try{ headers['Authorization']='Basic '+btoa(`${OPENSKY_USER}:${OPENSKY_PASS}`); }catch(e){}
-    }
-    try{
-      const mode=_hasAuth()?'AUTH':'ANON';
-      LOG.add(`[AVIATION] OpenSky poll [${mode}]...`,'sys');
-      UI.setStatus('aviation','FETCHING','warn');
-      const res=await fetch('https://opensky-network.org/api/states/all',
-        {headers, signal:AbortSignal.timeout(25000)});
+  function _initCollections() {
+    const layer = LAYER_REGISTRY.AVIATION;
+    if (_pointCollection) { try { scene.primitives.remove(_pointCollection); } catch(e){} }
+    if (_billboardCollection) { try { scene.primitives.remove(_billboardCollection); } catch(e){} }
+    _pointCollection = scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    _billboardCollection = scene.primitives.add(new Cesium.BillboardCollection());
+    _pointCollection._oeLayer = 'AVIATION';
+    _billboardCollection._oeLayer = 'AVIATION';
+  }
 
-      if(res.status===429){
-        _backoffMs=Math.min(_backoffMs*2, 300000); // exponential backoff, max 5min
-        LOG.add(`[AVIATION] Rate limited (429) — backoff ${Math.round(_backoffMs/1000)}s`,'warn');
-        UI.setStatus('aviation',`RATE LIMIT`,'warn');
-        if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null;}
-        setTimeout(()=>{ _backoffMs=_hasAuth()?30000:120000; _poll(); _startPoll(); },_backoffMs);
-        return;
-      }
-      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  // ── Fetch sources ─────────────────────────────────────────────
 
-      const json=await res.json();
-      if(!json.states?.length) throw new Error('empty response');
-      let n=0;
-      json.states.forEach(s=>{
-        const f=_parseState(s);if(!f) return;
-        f.classification=_classify(f);
-        const key=f.icao24||`_${Math.random()}`;
-        _flights.set(key,{...f,_key:key});n++;
+  // 1. ADSB.lol — free, open CORS, no auth, global coverage
+  async function _fetchADSBLol() {
+    const res = await fetch('https://api.adsb.lol/v2/all',
+      { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`ADSB.lol HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.ac?.length) throw new Error('ADSB.lol: empty');
+    const flights = [];
+    json.ac.forEach(ac => {
+      const f = _parseReadsb(ac);
+      if (f) { f.source='ADSB.lol'; flights.push(f); }
+    });
+    return flights;
+  }
+
+  // 2. ADS-B Exchange via RapidAPI — your existing key
+  async function _fetchRapidAPI() {
+    const res = await fetch('https://adsbexchange-com1.p.rapidapi.com/v2/lat/0/lon/0/dist/99999/',
+      { headers: {
+          'x-rapidapi-key':  RAPIDAPI_KEY,
+          'x-rapidapi-host': RAPIDAPI_HOST,
+        },
+        signal: AbortSignal.timeout(20000),
       });
-      _backoffMs=_hasAuth()?30000:120000; // reset backoff on success
-      LOG.add(`[AVIATION] ${n} flights loaded`,'sig');
-      _render();
-    }catch(e){
-      LOG.add(`[AVIATION] Poll failed: ${e.message}`,'warn');
-      UI.setStatus('aviation','ERROR','err');
-    }
+    if (!res.ok) throw new Error(`RapidAPI HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.ac?.length) throw new Error('RapidAPI: empty');
+    const flights = [];
+    json.ac.forEach(ac => {
+      const f = _parseReadsb(ac);
+      if (f) { f.source='ADS-B Exchange'; flights.push(f); }
+    });
+    return flights;
   }
 
-  function _startPoll(){
-    if(_pollTimer) return;
-    // Auth: 400 req/day = 1 per 216s — we use 30s (safe, uses ~2880 req/day MAX if always on)
-    // Anon: shared quota — 120s minimum to avoid hammering
-    const interval=_hasAuth()?30000:120000;
-    _pollTimer=setInterval(_poll,interval);
+  // 3. OpenSky anonymous — last resort, 120s intervals
+  async function _fetchOpenSky() {
+    const res = await fetch('https://opensky-network.org/api/states/all',
+      { signal: AbortSignal.timeout(25000) });
+    if (res.status === 429) throw new Error('OpenSky: 429 rate limited');
+    if (!res.ok) throw new Error(`OpenSky HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.states?.length) throw new Error('OpenSky: empty');
+    const flights = [];
+    json.states.forEach(s => {
+      const f = _parseOpenSky(s);
+      if (f) flights.push(f);
+    });
+    return flights;
   }
 
-  function _drUpdate(){
-    const now=Date.now();
-    _flights.forEach((f,key)=>{
-      if(!f.velocity||f.velocity<50){return;}
-      if((now-f.ts)>600000){_flights.delete(key);return;}
-      const spdMs=f.velocity/3.6,R=6371000;
-      const hdgRad=(f.heading||0)*Math.PI/180,latRad=f.lat*Math.PI/180;
-      f.lat+=(spdMs/R)*(180/Math.PI)*Math.cos(hdgRad);
-      f.lon+=(spdMs/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
-      f.lat=Math.max(-89.9,Math.min(89.9,f.lat));f.lon=((f.lon+540)%360)-180;
-      const entity=LAYER_REGISTRY.AVIATION.entities.entities.getById(key);
-      if(entity&&isFinite(f.lat)&&isFinite(f.lon)){
-        try{entity.position=Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM);
-          if(entity._oeData){entity._oeData.lat=f.lat;entity._oeData.lon=f.lon;}}catch(e){}
+  // ── Dead-reckoning — 1s smooth movement ─────────────────────
+  let _drTimer = null;
+  function _drUpdate() {
+    const now = Date.now();
+    _flights.forEach((f, key) => {
+      if (!f.velocity || f.velocity < 50) return;
+      if ((now - f.ts) > 600000) { _flights.delete(key); return; }
+      const spdMs  = f.velocity / 3.6;
+      const R      = 6371000;
+      const hdgRad = (f.heading || 0) * Math.PI / 180;
+      const latRad = f.lat * Math.PI / 180;
+      f.lat += (spdMs / R) * (180 / Math.PI) * Math.cos(hdgRad);
+      f.lon += (spdMs / R) * (180 / Math.PI) / Math.cos(latRad) * Math.sin(hdgRad);
+      f.lat = Math.max(-89.9, Math.min(89.9, f.lat));
+      f.lon = ((f.lon + 540) % 360) - 180;
+      // Update point primitive directly — no entity overhead
+      if (f._point && isFinite(f.lat) && isFinite(f.lon)) {
+        try {
+          f._point.position = Cesium.Cartesian3.fromDegrees(f.lon, f.lat, f.altM);
+        } catch(e) {}
+      }
+      // Also update entity if this flight is selected
+      const entity = LAYER_REGISTRY.AVIATION.entities.entities.getById(key);
+      if (entity) {
+        try {
+          entity.position = Cesium.Cartesian3.fromDegrees(f.lon, f.lat, f.altM);
+          if (entity._oeData) { entity._oeData.lat=f.lat; entity._oeData.lon=f.lon; }
+        } catch(e) {}
       }
     });
   }
 
-  function _render(){
-    const layer=LAYER_REGISTRY.AVIATION;
-    const existing=new Set();const feedItems=[];let milCount=0;
-    _flights.forEach((f,key)=>{
-      if(!isFinite(f.lat)||!isFinite(f.lon)) return;
-      existing.add(key);
-      const cls=f.classification||_classify(f);f.classification=cls;
-      const col=cls==='MILITARY'?'#ff9900':'#00ff9d';
-      const icon=_getIcon(cls,f.heading);
-      const flStr=`FL${Math.round((f.altFt||0)/100).toString().padStart(3,'0')}`;f.flStr=flStr;
-      if(cls==='MILITARY'&&!_milAlerted.has(key)){
-        _milAlerted.add(key);milCount++;
-        LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country}`,'warn');
+  // ── Render — PointPrimitiveCollection batch update ────────────
+  function _render(flights) {
+    const layer = LAYER_REGISTRY.AVIATION;
+
+    // Load all flights into map
+    flights.forEach(f => {
+      f.classification = _classify(f.icao24, f.callsign);
+      const key = f.icao24 || `_${f.callsign}_${Math.random()}`;
+      _flights.set(key, { ...f, _key: key });
+    });
+
+    // Prune very stale entries
+    const now = Date.now();
+    _flights.forEach((f, k) => { if ((now - f.ts) > 600000) _flights.delete(k); });
+
+    // Rebuild point collection (GPU-direct, fast)
+    if (!_pointCollection || _pointCollection.isDestroyed()) _initCollections();
+    _pointCollection.removeAll();
+
+    let milCount = 0;
+    const feedItems = [];
+
+    _flights.forEach((f, key) => {
+      if (!isFinite(f.lat) || !isFinite(f.lon)) return;
+
+      const cls = f.classification;
+      const col = cls === 'MILITARY'
+        ? Cesium.Color.fromCssColorString('#ff9900')
+        : Cesium.Color.fromCssColorString('#00ff9d');
+
+      // GPU-direct point — extremely fast for 5000+ objects
+      const point = _pointCollection.add({
+        position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, f.altM),
+        color:     col,
+        pixelSize: cls === 'MILITARY' ? 6 : 4,
+        scaleByDistance: new Cesium.NearFarScalar(200_000, 1.5, 8_000_000, 0.5),
+        disableDepthTestDistance: 500,
+      });
+      point._oeKey = key; // for click detection
+      f._point = point;
+
+      if (cls === 'MILITARY' && !_milAlerted.has(key)) {
+        _milAlerted.add(key); milCount++;
+        LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country}`, 'warn');
       }
-      let entity=layer.entities.entities.getById(key);
-      if(!entity){
-        entity=layer.entities.entities.add({id:key,
-          position:Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM),
-          billboard:{image:icon,width:cls==='MILITARY'?32:26,height:cls==='MILITARY'?32:26,
-            verticalOrigin:Cesium.VerticalOrigin.CENTER,
-            scaleByDistance:new Cesium.NearFarScalar(80_000,1.4,8_000_000,0.25),
-            translucencyByDistance:new Cesium.NearFarScalar(100_000,1.0,12_000_000,0.4),
-            disableDepthTestDistance:500},
-          label:{text:f.callsign||f.icao24.toUpperCase(),
-            font:'11px Share Tech Mono, monospace',
-            fillColor:Cesium.Color.fromCssColorString(col),
-            outlineColor:Cesium.Color.BLACK,outlineWidth:2,
-            style:Cesium.LabelStyle.FILL_AND_OUTLINE,
-            pixelOffset:new Cesium.Cartesian2(0,-22),
-            scaleByDistance:new Cesium.NearFarScalar(80_000,1.0,2_500_000,0.0),
-            disableDepthTestDistance:500,showBackground:true,
-            backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
-            backgroundPadding:new Cesium.Cartesian2(4,2)},
-        });
-      }else{
-        entity.position=Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM);
-        entity.billboard.image=icon;
-      }
-      entity._oeData={...f,type:'flight',flStr};
-      feedItems.push({type:'flight',name:f.callsign||f.icao24.toUpperCase(),
+      const flStr = `FL${Math.round((f.altFt||0)/100).toString().padStart(3,'0')}`;
+      f.flStr = flStr;
+
+      feedItems.push({
+        type:'flight', name:f.callsign||f.icao24.toUpperCase(),
         sub:`${f.country} · ${flStr} · ${f.velocity!=null?f.velocity+'km/h':'?'}`,
-        color:col,tag:cls==='MILITARY'?'tag-mil':'tag-air',tagLabel:cls==='MILITARY'?'MIL':'CIV',
-        lat:f.lat,lon:f.lon,feedAlt:Math.max(f.altM*1.5,150_000)});
+        color: cls==='MILITARY'?'#ff9900':'#00ff9d',
+        tag:cls==='MILITARY'?'tag-mil':'tag-air', tagLabel:cls==='MILITARY'?'MIL':'CIV',
+        lat:f.lat, lon:f.lon, feedAlt:Math.max(f.altM*1.5,150_000),
+      });
     });
-    [...layer.entities.entities.values].forEach(e=>{if(e.id&&!existing.has(e.id))layer.entities.entities.remove(e);});
-    layer.count=_flights.size;LAYER_REGISTRY._sync('AVIATION');
+
+    layer.count = _flights.size;
+    LAYER_REGISTRY._sync('AVIATION');
     UI.renderFeed(feedItems);
-    UI.setStatus('aviation',`LIVE · ${_flights.size}`,'ok');
-    document.getElementById('sb-flights').innerHTML=`FLIGHTS <span>${_flights.size}</span>`;
-    document.getElementById('sb-demo').style.display='none';
+    UI.setStatus('aviation', `LIVE · ${_flights.size}`, 'ok');
+    document.getElementById('sb-flights').innerHTML = `FLIGHTS <span>${_flights.size}</span>`;
+    document.getElementById('sb-demo').style.display = 'none';
+    if (milCount) LOG.add(`[AVIATION] ${milCount} new military contacts`, 'warn');
+    LOG.add(`[AVIATION] ${_flights.size} contacts rendered (${flights[0]?.source||'?'})`, 'sig');
   }
 
-  DETAIL_RENDERERS['flight']=(d)=>{
-    const cls=d.classification||'COMMERCIAL';const col=cls==='MILITARY'?'var(--orange)':'var(--g)';
-    const badge=cls==='MILITARY'
-      ?`<span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,153,0,0.4);background:rgba(255,153,0,0.08)">⚠ MILITARY</span>`
-      :`<span class="detail-badge" style="color:var(--cyan);border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.08)">✈ COMMERCIAL</span>`;
-    const spd=d.velocity!=null?`${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)`:'—';
-    const vr=d.vrate!=null?`<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>`:'—';
-    const sq=d.squawk?`<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>`:'—';
-    return`<div class="detail-name" style="color:${col}">${d.callsign||(d.icao24||'').toUpperCase()||'UNKNOWN'}</div>
-      ${badge}<div class="detail-grid" style="margin-top:6px">
+  // ── Click handler — add Entity for selected flight ────────────
+  // PointPrimitives aren't clickable like Entities, so we create
+  // a temporary Entity only for the clicked flight
+  function _handleClick(key) {
+    const f = _flights.get(key);
+    if (!f) return;
+    const layer = LAYER_REGISTRY.AVIATION;
+    // Remove any previous flight entity
+    layer.entities.entities.values
+      .filter(e => e._oeType === 'flight_detail')
+      .forEach(e => layer.entities.entities.remove(e));
+    const col  = f.classification==='MILITARY'?'#ff9900':'#00ff9d';
+    const icon = _getIcon(f.classification, f.heading);
+    const entity = layer.entities.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, f.altM),
+      billboard: {
+        image: icon, width:32, height:32,
+        verticalOrigin: Cesium.VerticalOrigin.CENTER,
+        disableDepthTestDistance: 500,
+      },
+      label: {
+        text: f.callsign || f.icao24.toUpperCase(),
+        font: '11px Share Tech Mono, monospace',
+        fillColor: Cesium.Color.fromCssColorString(col),
+        outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -22),
+        disableDepthTestDistance: 500,
+        showBackground: true,
+        backgroundColor: Cesium.Color.fromCssColorString('#020408').withAlpha(0.75),
+        backgroundPadding: new Cesium.Cartesian2(4, 2),
+      },
+    });
+    entity._oeType  = 'flight_detail';
+    entity._oeData  = { ...f, type:'flight' };
+    entity._oeKey   = key;
+    return entity;
+  }
+
+  DETAIL_RENDERERS['flight'] = (d) => {
+    const cls = d.classification || 'COMMERCIAL';
+    const col = cls==='MILITARY'?'var(--orange)':'var(--g)';
+    const badge = cls==='MILITARY'
+      ? `<span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,153,0,0.4);background:rgba(255,153,0,0.08)">⚠ MILITARY</span>`
+      : `<span class="detail-badge" style="color:var(--cyan);border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.08)">✈ COMMERCIAL</span>`;
+    const spd = d.velocity!=null?`${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)`:'—';
+    const vr  = d.vrate!=null
+      ? `<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>` : '—';
+    const sq  = d.squawk
+      ? `<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>` : '—';
+    const emerg = d.emergency
+      ? `<div style="color:var(--red);font-weight:bold;margin:4px 0">⚠ EMERGENCY: ${d.emergency.toUpperCase()}</div>` : '';
+    return `
+      <div class="detail-name" style="color:${col}">${d.callsign||(d.icao24||'').toUpperCase()||'UNKNOWN'}</div>
+      ${badge}${emerg}
+      <div class="detail-grid" style="margin-top:6px">
         <div><div class="dg-cell-label">ICAO24</div><div class="dg-cell-value">${(d.icao24||'—').toUpperCase()}</div></div>
-        <div><div class="dg-cell-label">Country</div><div class="dg-cell-value">${d.country||'—'}</div></div>
+        <div><div class="dg-cell-label">Reg / Type</div><div class="dg-cell-value">${d.reg||'—'} ${d.acType?'· '+d.acType:''}</div></div>
         <div><div class="dg-cell-label">Flight Level</div><div class="dg-cell-value" style="color:${col};font-weight:bold">${d.flStr||'—'}</div></div>
+        <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value">${d.altFt?d.altFt.toLocaleString()+' ft':'—'}</div></div>
         <div><div class="dg-cell-label">Speed</div><div class="dg-cell-value">${spd}</div></div>
         <div><div class="dg-cell-label">Heading</div><div class="dg-cell-value">${d.heading!=null?Math.round(d.heading)+'°':'—'}</div></div>
         <div><div class="dg-cell-label">Vert Rate</div><div class="dg-cell-value">${vr}</div></div>
         <div><div class="dg-cell-label">Squawk</div><div class="dg-cell-value">${sq}</div></div>
-        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">OpenSky Network</div></div>
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">${d.source||'—'}</div></div>
       </div>`;
   };
 
-  LAYER_REGISTRY.AVIATION.refresh=async function(){
-    if(_flights.size>0){_render();return;}
+  // ── Poll loop — try sources in priority order ─────────────────
+  let _pollTimer = null;
+  let _openSkyTimer = null;
+  let _lastSource = null;
+
+  async function _poll() {
+    // Try ADSB.lol first — free, open CORS, no rate limits
+    try {
+      const flights = await _fetchADSBLol();
+      _lastSource = 'ADSB.lol';
+      LOG.add(`[AVIATION] ADSB.lol: ${flights.length} flights`, 'sig');
+      _render(flights);
+      return;
+    } catch(e) {
+      LOG.add(`[AVIATION] ADSB.lol failed: ${e.message}`, 'warn');
+    }
+
+    // Try RapidAPI ADS-B Exchange
+    try {
+      const flights = await _fetchRapidAPI();
+      _lastSource = 'RapidAPI';
+      LOG.add(`[AVIATION] RapidAPI: ${flights.length} flights`, 'sig');
+      _render(flights);
+      return;
+    } catch(e) {
+      LOG.add(`[AVIATION] RapidAPI failed: ${e.message}`, 'warn');
+    }
+
+    // Last resort: OpenSky anonymous — only try every 120s to avoid 429
+    LOG.add('[AVIATION] All primary sources failed — OpenSky fallback', 'warn');
+    UI.setStatus('aviation', 'FALLBACK', 'warn');
+  }
+
+  async function _pollOpenSky() {
+    try {
+      const flights = await _fetchOpenSky();
+      _lastSource = 'OpenSky';
+      LOG.add(`[AVIATION] OpenSky: ${flights.length} flights`, 'sig');
+      _render(flights);
+    } catch(e) {
+      LOG.add(`[AVIATION] OpenSky fallback: ${e.message}`, 'warn');
+      UI.setStatus('aviation', 'ERROR', 'err');
+    }
+  }
+
+  LAYER_REGISTRY.AVIATION.refresh = async function() {
+    if (_flights.size > 0 && _lastSource) {
+      // Re-render existing data while poll runs in background
+      _render([...(_flights.values())]);
+    }
     await _poll();
   };
 
-  LOG.add('[AVIATION] v4.2 — OpenSky REST (set OPENSKY_PASS for auth mode)','air');
-  UI.setStatus('aviation','LOADING','warn');
-  _poll();           // immediate first poll
-  _startPoll();      // start interval
-  _drTimer=setInterval(_drUpdate,1000);  // smooth 1s dead-reckoning
-  return{refresh:()=>LAYER_REGISTRY.AVIATION.refresh()};
+  LOG.add('[AVIATION] v5 — ADSB.lol → RapidAPI → OpenSky cascade', 'air');
+  UI.setStatus('aviation', 'LOADING', 'warn');
+
+  _initCollections();
+
+  // Main poll: every 15s (ADSB.lol and RapidAPI have no strict rate limits)
+  _poll();
+  _pollTimer = setInterval(_poll, 15000);
+
+  // OpenSky fallback: every 120s only (rate limit safe)
+  _openSkyTimer = setInterval(_pollOpenSky, 120000);
+
+  // Dead-reckoning: every 1s for smooth movement
+  _drTimer = setInterval(_drUpdate, 1000);
+
+  return { refresh: () => LAYER_REGISTRY.AVIATION.refresh(), getFlights: () => _flights, handleClick: _handleClick };
 
 })(); // END AVIATION_MODULE
 

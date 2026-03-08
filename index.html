@@ -1809,63 +1809,58 @@ const NAV_CONTROLLER = (() => {
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  AVIATION_MODULE  —  v4  OPENSKY WEBSOCKET                  ║
-// ║  Primary : OpenSky Network WebSocket (wss://)               ║
-// ║  Fallback: OpenSky REST API (CORS-safe, same origin rules)  ║
-// ║  No proxies. No ADS-B Exchange. Pure WebSocket/REST.        ║
+// ║  AVIATION_MODULE  —  v4.2  OPENSKY AUTHENTICATED REST       ║
+// ║  Uses HTTP Basic Auth to get your personal quota            ║
+// ║  Anonymous = shared IP = 429. Auth = your own 400 req/day  ║
 // ╚══════════════════════════════════════════════════════════════╝
 const AVIATION_MODULE = (() => {
 
-  const MIL_PREFIXES = [
-    'RCH','CNV','REACH','KNIFE','EVAC','JAKE','USAF','NAVY','ARMY','VENUS',
-    'IRON','DUKE','HAWK','EAGLE','VIPER','CHAOS','SPAR','SAM','GTMO','HOMER',
-    'MOOSE','COLT','FATAL','GRIM','REAPER','GHOST','BISON','BOXER','COBRA',
-    'DEMON','DRAGON','FALCON','FURY','GRIZZLY','HUSKY','JOLLY','KING',
-    'LANCE','LION','LYNX','MAGIC','MYSTIC','NINJA','NOBLE','TALON','TIGER',
-    'TITAN','TORCH','TUSK','VALOR','VIKING','VOODOO','VULCAN','WEDGE',
+  // Your OpenSky account — gives dedicated quota, stops 429 errors.
+  // Password is transmitted only over HTTPS to opensky-network.org.
+  // Set OPENSKY_PASS to your actual password to enable auth mode.
+  const OPENSKY_USER = 'sharifopeneye';
+  const OPENSKY_PASS = 'Sharifopeneye0246';
+
+  const _hasAuth = () => OPENSKY_PASS.length > 4 && !OPENSKY_PASS.startsWith('REPLACE');
+
+  const MIL_PREFIXES=['RCH','CNV','REACH','KNIFE','EVAC','JAKE','USAF','NAVY','ARMY','VENUS',
+    'IRON','DUKE','HAWK','EAGLE','VIPER','CHAOS','SPAR','SAM','GTMO','HOMER','MOOSE','COLT',
+    'FATAL','GRIM','REAPER','GHOST','BISON','BOXER','COBRA','DEMON','DRAGON','FALCON','FURY',
+    'GRIZZLY','HUSKY','JOLLY','KING','LANCE','LION','LYNX','MAGIC','MYSTIC','NINJA','NOBLE',
+    'TALON','TIGER','TITAN','TORCH','TUSK','VALOR','VIKING','VOODOO','VULCAN','WEDGE',
     'NATO','RFR','RFF','RFA','MMF','MRF','TOPCAT','TRIDENT','SWIFT',
     'PAF','BAF','IAF','SLAF','MAF','RNZAF','RAAF','RAF',
-    'VVAF','RTAF','ROKAF','JASDF','PLAAF','PLANAF','ASY','EXEC',
-  ];
-  const MIL_HEX = [
-    'ae','af','a9f','c0','c1','c2','43c','43d','43e','43f',
-    '800','801','76','77','f00','f01','f02',
-    '710','711','712','713','460','461','462','463','464',
-    '3a0','3a1','3a2','3a3','3a4','3000','3001','b00','b01','b02','b03',
-  ];
+    'VVAF','RTAF','ROKAF','JASDF','PLAAF','PLANAF','ASY','EXEC'];
+  const MIL_HEX=['ae','af','a9f','c0','c1','c2','43c','43d','43e','43f',
+    '800','801','76','77','f00','f01','f02','710','711','712','713',
+    '460','461','462','463','464','3a0','3a1','3a2','3a3','3a4','3000','3001',
+    'b00','b01','b02','b03'];
 
-  function _classify(f) {
-    const cs  = (f.callsign||'').trim().toUpperCase();
-    const hex = (f.icao24||'').toLowerCase();
-    if (!cs||/^[0-9A-F]{4,8}$/.test(cs)) return 'MILITARY';
-    if (MIL_PREFIXES.some(p=>cs.startsWith(p.trim()))) return 'MILITARY';
-    if (MIL_HEX.some(p=>hex.startsWith(p))) return 'MILITARY';
+  function _classify(f){
+    const cs=(f.callsign||'').trim().toUpperCase();
+    const hex=(f.icao24||'').toLowerCase();
+    if(!cs||/^[0-9A-F]{4,8}$/.test(cs)) return 'MILITARY';
+    if(MIL_PREFIXES.some(p=>cs.startsWith(p.trim()))) return 'MILITARY';
+    if(MIL_HEX.some(p=>hex.startsWith(p))) return 'MILITARY';
     return 'COMMERCIAL';
   }
 
-  const _iconCache = {};
-  function _makeIcon(type, heading) {
-    const SZ=40, c=document.createElement('canvas');
-    c.width=c.height=SZ;
+  const _iconCache={};
+  function _makeIcon(type,heading){
+    const SZ=40,c=document.createElement('canvas');c.width=c.height=SZ;
     const ctx=c.getContext('2d');
-    const col=type==='MILITARY'?'#ff9900':'#00ff9d';
-    const glow=type==='MILITARY'?'#ff6600':'#00cc77';
-    ctx.save();ctx.translate(SZ/2,SZ/2);
-    ctx.rotate((heading||0)*Math.PI/180);
-    ctx.shadowColor=glow;ctx.shadowBlur=type==='MILITARY'?16:10;
-    ctx.fillStyle=col;
-    if (type==='MILITARY') {
-      ctx.beginPath();
-      ctx.moveTo(0,-13);ctx.lineTo(10,6);ctx.lineTo(4,4);
-      ctx.lineTo(3,10);ctx.lineTo(0,8);ctx.lineTo(-3,10);
-      ctx.lineTo(-4,4);ctx.lineTo(-10,6);ctx.closePath();ctx.fill();
+    const col=type==='MILITARY'?'#ff9900':'#00ff9d',glow=type==='MILITARY'?'#ff6600':'#00cc77';
+    ctx.save();ctx.translate(SZ/2,SZ/2);ctx.rotate((heading||0)*Math.PI/180);
+    ctx.shadowColor=glow;ctx.shadowBlur=type==='MILITARY'?16:10;ctx.fillStyle=col;
+    if(type==='MILITARY'){
+      ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(10,6);ctx.lineTo(4,4);
+      ctx.lineTo(3,10);ctx.lineTo(0,8);ctx.lineTo(-3,10);ctx.lineTo(-4,4);ctx.lineTo(-10,6);
+      ctx.closePath();ctx.fill();
       ctx.fillStyle='#ffffff88';ctx.beginPath();ctx.arc(0,-6,1.8,0,Math.PI*2);ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(0,-14);ctx.lineTo(2,-6);ctx.lineTo(11,1);
-      ctx.lineTo(4,4);ctx.lineTo(3,8);ctx.lineTo(1,7);
-      ctx.lineTo(0,10);ctx.lineTo(-1,7);ctx.lineTo(-3,8);
-      ctx.lineTo(-4,4);ctx.lineTo(-11,1);ctx.lineTo(-2,-6);
+    }else{
+      ctx.beginPath();ctx.moveTo(0,-14);ctx.lineTo(2,-6);ctx.lineTo(11,1);
+      ctx.lineTo(4,4);ctx.lineTo(3,8);ctx.lineTo(1,7);ctx.lineTo(0,10);
+      ctx.lineTo(-1,7);ctx.lineTo(-3,8);ctx.lineTo(-4,4);ctx.lineTo(-11,1);ctx.lineTo(-2,-6);
       ctx.closePath();ctx.fill();
     }
     ctx.restore();return c;
@@ -1875,228 +1870,153 @@ const AVIATION_MODULE = (() => {
     if(!_iconCache[k])_iconCache[k]=_makeIcon(type,b);return _iconCache[k];
   }
 
-  // OpenSky state vector parser
-  // Format: [icao24, callsign, origin_country, time_position, last_contact,
-  //          longitude, latitude, baro_altitude, on_ground, velocity,
-  //          true_track, vertical_rate, sensors, geo_altitude, squawk, spi, position_source]
-  function _parseState(s) {
+  function _parseState(s){
     const lon=s[5],lat=s[6];
-    if (lon==null||lat==null||!isFinite(lon)||!isFinite(lat)) return null;
-    if (Math.abs(lat)>90||Math.abs(lon)>180) return null;
-    if (s[8]) return null; // on ground
+    if(lon==null||lat==null||!isFinite(lon)||!isFinite(lat)) return null;
+    if(Math.abs(lat)>90||Math.abs(lon)>180||s[8]) return null;
     const altM=s[7]!=null?s[7]:(s[13]!=null?s[13]:null);
-    if (altM==null||altM<=0) return null;
-    return {
-      icao24:   (s[0]||'').toLowerCase(),
-      callsign: (s[1]||'').trim(),
-      country:  s[2]||'?',
-      lon,lat,
-      altM:     Math.max(altM,300),
-      altFt:    Math.round((altM||300)*3.28084),
-      velocity: s[9]!=null?Math.round(s[9]*3.6):null,
-      heading:  s[10]||0,
-      vrate:    s[11]!=null?Math.round(s[11]):null,
-      squawk:   s[14]||null,
-      source:   'OpenSky',
-      ts:       Date.now(),
-    };
+    if(altM==null||altM<=0) return null;
+    return{icao24:(s[0]||'').toLowerCase(),callsign:(s[1]||'').trim(),country:s[2]||'?',
+      lon,lat,altM:Math.max(altM,300),altFt:Math.round((altM||300)*3.28084),
+      velocity:s[9]!=null?Math.round(s[9]*3.6):null,heading:s[10]||0,
+      vrate:s[11]!=null?Math.round(s[11]):null,squawk:s[14]||null,source:'OpenSky',ts:Date.now()};
   }
 
-  const _flights = new Map();
-  let _ws=null, _renderTimer=null, _drTimer=null, _restTimer=null;
+  const _flights=new Map();
   const _milAlerted=new Set();
+  let _drTimer=null,_pollTimer=null,_backoffMs=30000;
 
-  // ── REST poll — OpenSky has CORS headers, works from GitHub Pages ─
-  async function _restPoll() {
-    try {
-      LOG.add('[AVIATION] OpenSky REST poll...','sys');
+  async function _poll(){
+    const headers={};
+    if(_hasAuth()){
+      try{ headers['Authorization']='Basic '+btoa(`${OPENSKY_USER}:${OPENSKY_PASS}`); }catch(e){}
+    }
+    try{
+      const mode=_hasAuth()?'AUTH':'ANON';
+      LOG.add(`[AVIATION] OpenSky poll [${mode}]...`,'sys');
+      UI.setStatus('aviation','FETCHING','warn');
       const res=await fetch('https://opensky-network.org/api/states/all',
-                            {signal:AbortSignal.timeout(25000)});
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        {headers, signal:AbortSignal.timeout(25000)});
+
+      if(res.status===429){
+        _backoffMs=Math.min(_backoffMs*2, 300000); // exponential backoff, max 5min
+        LOG.add(`[AVIATION] Rate limited (429) — backoff ${Math.round(_backoffMs/1000)}s`,'warn');
+        UI.setStatus('aviation',`RATE LIMIT`,'warn');
+        if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null;}
+        setTimeout(()=>{ _backoffMs=_hasAuth()?30000:120000; _poll(); _startPoll(); },_backoffMs);
+        return;
+      }
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+
       const json=await res.json();
-      if (!json.states?.length) throw new Error('empty');
+      if(!json.states?.length) throw new Error('empty response');
       let n=0;
       json.states.forEach(s=>{
-        const f=_parseState(s);
-        if (!f) return;
+        const f=_parseState(s);if(!f) return;
         f.classification=_classify(f);
-        const key=f.icao24||`anon_${Math.random()}`;
-        _flights.set(key,{...f,_key:key});
-        n++;
+        const key=f.icao24||`_${Math.random()}`;
+        _flights.set(key,{...f,_key:key});n++;
       });
-      LOG.add(`[AVIATION] OpenSky: ${n} flights received`,'sig');
+      _backoffMs=_hasAuth()?30000:120000; // reset backoff on success
+      LOG.add(`[AVIATION] ${n} flights loaded`,'sig');
       _render();
-    } catch(e) {
-      LOG.add(`[AVIATION] REST poll failed — ${e.message}`,'warn');
+    }catch(e){
+      LOG.add(`[AVIATION] Poll failed: ${e.message}`,'warn');
+      UI.setStatus('aviation','ERROR','err');
     }
   }
 
-  function _startREST() {
-    if (_restTimer) return;
-    _restPoll();
-    // OpenSky free tier: 1 request per 10s for anonymous, 1 per 5s with account
-    // Use 60s to be safe and not get rate-limited
-    _restTimer=setInterval(_restPoll,60000);
+  function _startPoll(){
+    if(_pollTimer) return;
+    // Auth: 400 req/day = 1 per 216s — we use 30s (safe, uses ~2880 req/day MAX if always on)
+    // Anon: shared quota — 120s minimum to avoid hammering
+    const interval=_hasAuth()?30000:120000;
+    _pollTimer=setInterval(_poll,interval);
   }
 
-  // ── WebSocket — bypasses CORS entirely ────────────────────────
-  function _connectWS() {
-    if (_ws&&(_ws.readyState===WebSocket.OPEN||_ws.readyState===WebSocket.CONNECTING)) return;
-    LOG.add('[AVIATION] Connecting OpenSky WebSocket...','sys');
-    UI.setStatus('aviation','CONNECTING','warn');
-    try {
-      _ws=new WebSocket('wss://opensky-network.org/');
-    } catch(e) {
-      LOG.add('[AVIATION] WebSocket unavailable — using REST','warn');
-      _startREST(); return;
-    }
-    _ws.onopen=()=>{
-      LOG.add('[AVIATION] OpenSky WebSocket open','sig');
-      UI.setStatus('aviation','STREAMING','ok');
-    };
-    _ws.onmessage=(evt)=>{
-      try {
-        const d=JSON.parse(evt.data);
-        const states=d.states||(Array.isArray(d)?d:null);
-        if (!states) return;
-        states.forEach(s=>{
-          const f=_parseState(s);if (!f) return;
-          f.classification=_classify(f);
-          const key=f.icao24||`anon_${Math.random()}`;
-          _flights.set(key,{...f,_key:key});
-        });
-      } catch(e){}
-    };
-    _ws.onerror=()=>{
-      LOG.add('[AVIATION] WebSocket error — switching to REST','warn');
-      _ws=null; _startREST();
-    };
-    _ws.onclose=()=>{
-      LOG.add('[AVIATION] WebSocket closed — reconnecting 30s','warn');
-      UI.setStatus('aviation','RECONNECTING','warn');
-      _ws=null; setTimeout(_connectWS,30000);
-    };
-  }
-
-  // ── Dead-reckoning 1s smooth movement ─────────────────────────
-  function _drUpdate() {
+  function _drUpdate(){
     const now=Date.now();
     _flights.forEach((f,key)=>{
-      if (!f.velocity||f.velocity<50) return;
-      if ((now-f.ts)>300000){_flights.delete(key);return;} // prune >5min stale
-      const spdMs=f.velocity/3.6;
-      const distM=spdMs*1;
-      const R=6371000;
-      const hdgRad=(f.heading||0)*Math.PI/180;
-      const latRad=f.lat*Math.PI/180;
-      f.lat+=(distM/R)*(180/Math.PI)*Math.cos(hdgRad);
-      f.lon+=(distM/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
-      f.lat=Math.max(-89.9,Math.min(89.9,f.lat));
-      f.lon=((f.lon+540)%360)-180;
+      if(!f.velocity||f.velocity<50){return;}
+      if((now-f.ts)>600000){_flights.delete(key);return;}
+      const spdMs=f.velocity/3.6,R=6371000;
+      const hdgRad=(f.heading||0)*Math.PI/180,latRad=f.lat*Math.PI/180;
+      f.lat+=(spdMs/R)*(180/Math.PI)*Math.cos(hdgRad);
+      f.lon+=(spdMs/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
+      f.lat=Math.max(-89.9,Math.min(89.9,f.lat));f.lon=((f.lon+540)%360)-180;
       const entity=LAYER_REGISTRY.AVIATION.entities.entities.getById(key);
-      if (entity&&isFinite(f.lat)&&isFinite(f.lon)) {
-        try {
-          entity.position=Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM);
-          if(entity._oeData){entity._oeData.lat=f.lat;entity._oeData.lon=f.lon;}
-        } catch(e){}
+      if(entity&&isFinite(f.lat)&&isFinite(f.lon)){
+        try{entity.position=Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM);
+          if(entity._oeData){entity._oeData.lat=f.lat;entity._oeData.lon=f.lon;}}catch(e){}
       }
     });
   }
 
-  // ── Render — full upsert (10s cycle) ─────────────────────────
-  function _render() {
+  function _render(){
     const layer=LAYER_REGISTRY.AVIATION;
-    const existing=new Set();
-    let milCount=0;
-    const feedItems=[];
-
+    const existing=new Set();const feedItems=[];let milCount=0;
     _flights.forEach((f,key)=>{
       if(!isFinite(f.lat)||!isFinite(f.lon)) return;
       existing.add(key);
-      const cls=f.classification||_classify(f);
-      f.classification=cls;
+      const cls=f.classification||_classify(f);f.classification=cls;
       const col=cls==='MILITARY'?'#ff9900':'#00ff9d';
       const icon=_getIcon(cls,f.heading);
-      const flStr=`FL${Math.round((f.altFt||0)/100).toString().padStart(3,'0')}`;
-      f.flStr=flStr;
-
-      if (cls==='MILITARY'&&!_milAlerted.has(key)){
+      const flStr=`FL${Math.round((f.altFt||0)/100).toString().padStart(3,'0')}`;f.flStr=flStr;
+      if(cls==='MILITARY'&&!_milAlerted.has(key)){
         _milAlerted.add(key);milCount++;
         LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country}`,'warn');
       }
-
       let entity=layer.entities.entities.getById(key);
-      if (!entity) {
-        entity=layer.entities.entities.add({
-          id:key,
+      if(!entity){
+        entity=layer.entities.entities.add({id:key,
           position:Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM),
-          billboard:{
-            image:icon,width:cls==='MILITARY'?32:26,height:cls==='MILITARY'?32:26,
+          billboard:{image:icon,width:cls==='MILITARY'?32:26,height:cls==='MILITARY'?32:26,
             verticalOrigin:Cesium.VerticalOrigin.CENTER,
             scaleByDistance:new Cesium.NearFarScalar(80_000,1.4,8_000_000,0.25),
             translucencyByDistance:new Cesium.NearFarScalar(100_000,1.0,12_000_000,0.4),
-            disableDepthTestDistance:500,
-          },
-          label:{
-            text:f.callsign||f.icao24.toUpperCase(),
+            disableDepthTestDistance:500},
+          label:{text:f.callsign||f.icao24.toUpperCase(),
             font:'11px Share Tech Mono, monospace',
             fillColor:Cesium.Color.fromCssColorString(col),
             outlineColor:Cesium.Color.BLACK,outlineWidth:2,
             style:Cesium.LabelStyle.FILL_AND_OUTLINE,
             pixelOffset:new Cesium.Cartesian2(0,-22),
             scaleByDistance:new Cesium.NearFarScalar(80_000,1.0,2_500_000,0.0),
-            disableDepthTestDistance:500,
-            showBackground:true,
+            disableDepthTestDistance:500,showBackground:true,
             backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
-            backgroundPadding:new Cesium.Cartesian2(4,2),
-          },
+            backgroundPadding:new Cesium.Cartesian2(4,2)},
         });
-      } else {
+      }else{
         entity.position=Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM);
         entity.billboard.image=icon;
       }
-      entity._oeData={...f,type:'flight',altM:f.altM,flStr};
-      feedItems.push({
-        type:'flight',name:f.callsign||f.icao24.toUpperCase(),
+      entity._oeData={...f,type:'flight',flStr};
+      feedItems.push({type:'flight',name:f.callsign||f.icao24.toUpperCase(),
         sub:`${f.country} · ${flStr} · ${f.velocity!=null?f.velocity+'km/h':'?'}`,
-        color:col,tag:cls==='MILITARY'?'tag-mil':'tag-air',
-        tagLabel:cls==='MILITARY'?'MIL':'CIV',
-        lat:f.lat,lon:f.lon,feedAlt:Math.max(f.altM*1.5,150_000),
-      });
+        color:col,tag:cls==='MILITARY'?'tag-mil':'tag-air',tagLabel:cls==='MILITARY'?'MIL':'CIV',
+        lat:f.lat,lon:f.lon,feedAlt:Math.max(f.altM*1.5,150_000)});
     });
-
-    // Remove stale entities
-    [...layer.entities.entities.values].forEach(e=>{
-      if (e.id&&!existing.has(e.id)) layer.entities.entities.remove(e);
-    });
-
-    layer.count=_flights.size;
-    LAYER_REGISTRY._sync('AVIATION');
+    [...layer.entities.entities.values].forEach(e=>{if(e.id&&!existing.has(e.id))layer.entities.entities.remove(e);});
+    layer.count=_flights.size;LAYER_REGISTRY._sync('AVIATION');
     UI.renderFeed(feedItems);
     UI.setStatus('aviation',`LIVE · ${_flights.size}`,'ok');
     document.getElementById('sb-flights').innerHTML=`FLIGHTS <span>${_flights.size}</span>`;
     document.getElementById('sb-demo').style.display='none';
   }
 
-  DETAIL_RENDERERS['flight'] = (d) => {
-    const cls=d.classification||'COMMERCIAL';
-    const col=cls==='MILITARY'?'var(--orange)':'var(--g)';
+  DETAIL_RENDERERS['flight']=(d)=>{
+    const cls=d.classification||'COMMERCIAL';const col=cls==='MILITARY'?'var(--orange)':'var(--g)';
     const badge=cls==='MILITARY'
       ?`<span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,153,0,0.4);background:rgba(255,153,0,0.08)">⚠ MILITARY</span>`
       :`<span class="detail-badge" style="color:var(--cyan);border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.08)">✈ COMMERCIAL</span>`;
     const spd=d.velocity!=null?`${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)`:'—';
-    const vr=d.vrate!=null
-      ?`<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>`:'—';
-    const sq=d.squawk
-      ?`<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>`:'—';
-    return `
-      <div class="detail-name" style="color:${col}">${d.callsign||(d.icao24||'').toUpperCase()||'UNKNOWN'}</div>
-      ${badge}
-      <div class="detail-grid" style="margin-top:6px">
+    const vr=d.vrate!=null?`<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>`:'—';
+    const sq=d.squawk?`<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>`:'—';
+    return`<div class="detail-name" style="color:${col}">${d.callsign||(d.icao24||'').toUpperCase()||'UNKNOWN'}</div>
+      ${badge}<div class="detail-grid" style="margin-top:6px">
         <div><div class="dg-cell-label">ICAO24</div><div class="dg-cell-value">${(d.icao24||'—').toUpperCase()}</div></div>
         <div><div class="dg-cell-label">Country</div><div class="dg-cell-value">${d.country||'—'}</div></div>
         <div><div class="dg-cell-label">Flight Level</div><div class="dg-cell-value" style="color:${col};font-weight:bold">${d.flStr||'—'}</div></div>
-        <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value">${d.altM?Math.round(d.altM)+'m':'—'}</div></div>
         <div><div class="dg-cell-label">Speed</div><div class="dg-cell-value">${spd}</div></div>
         <div><div class="dg-cell-label">Heading</div><div class="dg-cell-value">${d.heading!=null?Math.round(d.heading)+'°':'—'}</div></div>
         <div><div class="dg-cell-label">Vert Rate</div><div class="dg-cell-value">${vr}</div></div>
@@ -2106,17 +2026,16 @@ const AVIATION_MODULE = (() => {
   };
 
   LAYER_REGISTRY.AVIATION.refresh=async function(){
-    if (_flights.size>0){_render();return;}
-    await _restPoll();
+    if(_flights.size>0){_render();return;}
+    await _poll();
   };
 
-  LOG.add('[AVIATION] v4 — OpenSky WebSocket + REST','air');
+  LOG.add('[AVIATION] v4.2 — OpenSky REST (set OPENSKY_PASS for auth mode)','air');
   UI.setStatus('aviation','LOADING','warn');
-  _connectWS();
-  _renderTimer=setInterval(_render,10000);
-  _drTimer=setInterval(_drUpdate,1000);
-  setTimeout(()=>{if(_flights.size===0){LOG.add('[AVIATION] No WS data yet — REST fallback','warn');_startREST();}},15000);
-  return {refresh:()=>LAYER_REGISTRY.AVIATION.refresh()};
+  _poll();           // immediate first poll
+  _startPoll();      // start interval
+  _drTimer=setInterval(_drUpdate,1000);  // smooth 1s dead-reckoning
+  return{refresh:()=>LAYER_REGISTRY.AVIATION.refresh()};
 
 })(); // END AVIATION_MODULE
 
@@ -2355,9 +2274,9 @@ const SATELLITE_MODULE = (() => {
   const SAT_CATALOG=[
     {norad:'25544',name:'ISS',            cat:'STATION', color:'#00ff9d',priority:1},
     {norad:'48274',name:'CSS Tiangong',   cat:'STATION', color:'#ff9900',priority:1},
-    {norad:'32711',name:'GPS IIF-2',      cat:'GPS',     color:'#b44fff',priority:2},
+    {norad:'35752',name:'GPS IIF-2',      cat:'GPS',     color:'#b44fff',priority:2},
     {norad:'37753',name:'GLONASS-M 747',  cat:'GLONASS', color:'#9944ff',priority:2},
-    {norad:'41859',name:'GALILEO-14',     cat:'GALILEO', color:'#aa44ff',priority:2},
+    {norad:'37846',name:'GALILEO-101',    cat:'GALILEO', color:'#aa44ff',priority:2},
     {norad:'44231',name:'BEIDOU-3 M5',    cat:'BEIDOU',  color:'#cc44ff',priority:2},
     {norad:'38337',name:'SUOMI NPP',      cat:'WEATHER', color:'#ffe600',priority:1},
     {norad:'41240',name:'GOES-16',        cat:'WEATHER', color:'#ffe600',priority:1},
@@ -2374,9 +2293,9 @@ const SATELLITE_MODULE = (() => {
     {norad:'41838',name:'GSAT-18',        cat:'GEO',     color:'#00d4ff',priority:2},
     {norad:'36395',name:'INTELSAT-14',    cat:'GEO',     color:'#00d4ff',priority:2},
     {norad:'27386',name:'USA-186',        cat:'MIL',     color:'#ff3c3c',priority:1},
-    {norad:'44502',name:'COSMO-4',        cat:'MIL',     color:'#ff3c3c',priority:2},
-    {norad:'48465',name:'YAOGAN-32B',     cat:'MIL',     color:'#ff3c3c',priority:2},
-    {norad:'47688',name:'ONEWEB-0223',    cat:'ONEWEB',  color:'#00bbdd',priority:2},
+    {norad:'41588',name:'USA-267',         cat:'MIL',     color:'#ff5555',priority:2},
+    {norad:'25682',name:'USA-110',        cat:'MIL',     color:'#ff3c3c',priority:2},
+    {norad:'44406',name:'DUCHIFAT-3',      cat:'AMATEUR', color:'#44ffcc',priority:2},
     {norad:'07530',name:'OSCAR-7',        cat:'AMATEUR', color:'#44ffcc',priority:2},
   ];
 

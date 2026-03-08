@@ -1,0 +1,3304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>OpenEye // Tactical Intelligence Platform</title>
+
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.116/Build/Cesium/Cesium.js"></script>
+<link  href="https://cesium.com/downloads/cesiumjs/releases/1.116/Build/Cesium/Widgets/widgets.css" rel="stylesheet"/>
+<link  href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@700;900&display=swap" rel="stylesheet"/>
+
+<style>
+/* ═══════════════════════════════════════════════════════════
+   RESET & ROOT VARIABLES
+═══════════════════════════════════════════════════════════ */
+@keyframes pulse {
+  0%,100% { opacity:1; box-shadow:0 0 6px #00ff9d; }
+  50%      { opacity:0.3; box-shadow:0 0 2px #00ff9d; }
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  /* Core palette — locked in: Dark Tactical / Military Terminal */
+  --bg:         #020408;       /* deep black background              */
+  --g:          #00ff9d;       /* primary green                      */
+  --g-dim:      rgba(0,255,157,0.08);
+  --g-glow:     rgba(0,255,157,0.50);
+  --g-border:   rgba(0,255,157,0.20);
+  --g-border2:  rgba(0,255,157,0.35);
+  --cyan:       #00d4ff;
+  --red:        #ff3c3c;
+  --orange:     #ff9900;
+  --yellow:     #ffe600;
+  --purple:     #b44fff;
+  --lime:       #c8ff00;
+  --pink:       #ff4fa0;
+
+  /* Typography */
+  --font-mono:  'Share Tech Mono', monospace;
+  --font-hud:   'Orbitron', monospace;
+
+  /* Layout */
+  --sidebar-w:  270px;
+  --topbar-h:   48px;
+  --statusbar-h:24px;
+}
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--g);
+  font-family: var(--font-mono);
+}
+
+/* Global scanline texture over everything */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent, transparent 2px,
+    rgba(0,0,0,0.12) 2px, rgba(0,0,0,0.12) 4px
+  );
+  pointer-events: none;
+  z-index: 9000;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CESIUM CONTAINER
+═══════════════════════════════════════════════════════════ */
+#cesiumContainer {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+
+/* Kill every piece of default Cesium UI */
+.cesium-widget-credits,
+.cesium-viewer-toolbar,
+.cesium-viewer-animationContainer,
+.cesium-viewer-timelineContainer,
+.cesium-viewer-bottom,
+.cesium-viewer-fullscreenContainer,
+.cesium-viewer-geocoderContainer,
+.cesium-infoBox,
+.cesium-selection-wrapper { display: none !important; }
+
+/* ═══════════════════════════════════════════════════════════
+   TOPBAR
+═══════════════════════════════════════════════════════════ */
+#topbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--topbar-h);
+  background: rgba(2,4,8,0.95);
+  border-bottom: 1px solid var(--g-border);
+  backdrop-filter: blur(20px);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 14px;
+  z-index: 500;
+  /* Top glow line */
+  box-shadow: 0 1px 0 rgba(0,255,157,0.12), 0 2px 20px rgba(0,0,0,0.8);
+}
+
+.tb-logo {
+  font-family: var(--font-hud);
+  font-size: 1rem;
+  font-weight: 900;
+  color: var(--g);
+  letter-spacing: 0.25em;
+  text-shadow: 0 0 14px var(--g-glow);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.tb-eye {
+  width: 22px; height: 22px;
+  border: 2px solid var(--g);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 10px var(--g-glow);
+  flex-shrink: 0;
+  animation: eyePulse 3s ease-in-out infinite;
+}
+.tb-eye::after {
+  content: '';
+  width: 8px; height: 8px;
+  background: var(--g);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--g);
+}
+@keyframes eyePulse {
+  0%,100% { box-shadow: 0 0 8px var(--g-glow); }
+  50%      { box-shadow: 0 0 22px var(--g-glow); }
+}
+
+.tb-divider { width: 1px; height: 22px; background: var(--g-border); flex-shrink: 0; }
+
+.tb-center { flex: 1; display: flex; align-items: center; gap: 16px; overflow: hidden; }
+
+#tb-utc {
+  font-size: 0.72rem;
+  color: var(--g);
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 8px var(--g-glow);
+  white-space: nowrap;
+}
+#tb-coords {
+  font-size: 0.58rem;
+  color: rgba(0,255,157,0.35);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tb-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* LIVE badge */
+.tb-live {
+  display: flex; align-items: center; gap: 5px;
+  border: 1px solid rgba(255,60,60,0.4);
+  background: rgba(255,60,60,0.08);
+  padding: 3px 10px;
+  font-size: 0.56rem;
+  letter-spacing: 0.18em;
+  color: var(--red);
+}
+.tb-live-dot {
+  width: 6px; height: 6px;
+  background: var(--red); border-radius: 50%;
+  box-shadow: 0 0 6px var(--red);
+  animation: blink 1s infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.1} }
+
+/* HUD buttons */
+.hud-btn {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  background: rgba(0,255,157,0.04);
+  border: 1px solid var(--g-border);
+  color: rgba(0,255,157,0.5);
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.hud-btn:hover {
+  background: var(--g-dim);
+  border-color: var(--g);
+  color: var(--g);
+  box-shadow: 0 0 10px rgba(0,255,157,0.15);
+}
+.hud-btn.active {
+  background: var(--g-dim);
+  border-color: var(--g);
+  color: var(--g);
+  box-shadow: 0 0 10px rgba(0,255,157,0.20);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SHARED SIDEBAR BASE
+═══════════════════════════════════════════════════════════ */
+.sidebar {
+  position: fixed;
+  top: var(--topbar-h);
+  bottom: var(--statusbar-h);
+  width: var(--sidebar-w);
+  background: rgba(2,4,8,0.94);
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 400;
+  transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+}
+
+/* Left sidebar */
+#sidebar-left {
+  left: 0;
+  border-right: 1px solid var(--g-border);
+  box-shadow: 2px 0 30px rgba(0,0,0,0.7), inset -1px 0 0 rgba(0,255,157,0.05);
+}
+#sidebar-left.hidden  { transform: translateX(calc(-1 * var(--sidebar-w))); }
+
+/* Right sidebar */
+#sidebar-right {
+  right: 0;
+  border-left: 1px solid var(--g-border);
+  box-shadow: -2px 0 30px rgba(0,0,0,0.7), inset 1px 0 0 rgba(0,255,157,0.05);
+}
+#sidebar-right.hidden { transform: translateX(var(--sidebar-w)); }
+
+/* Sidebar section header */
+.sb-section-hdr {
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--g-border);
+  background: rgba(0,255,157,0.03);
+  flex-shrink: 0;
+}
+.sb-section-tag {
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.22em;
+  color: rgba(0,255,157,0.40);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+.sb-section-title {
+  font-family: var(--font-hud);
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--g);
+  letter-spacing: 0.18em;
+  text-shadow: 0 0 10px var(--g-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LEFT SIDEBAR  —  [SYSTEM_STATUS]
+═══════════════════════════════════════════════════════════ */
+
+/* UTC Clock block */
+.sys-clock {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--g-border);
+  flex-shrink: 0;
+}
+.sys-clock-label {
+  font-size: 0.48rem;
+  letter-spacing: 0.22em;
+  color: rgba(0,255,157,0.30);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+#sys-time {
+  font-family: var(--font-hud);
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: var(--g);
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 16px var(--g-glow);
+  line-height: 1;
+}
+#sys-date {
+  font-size: 0.52rem;
+  color: rgba(0,255,157,0.35);
+  letter-spacing: 0.14em;
+  margin-top: 4px;
+}
+
+/* Camera position block */
+.sys-position {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--g-border);
+  flex-shrink: 0;
+}
+.sys-pos-label {
+  font-size: 0.48rem;
+  letter-spacing: 0.22em;
+  color: rgba(0,255,157,0.30);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.sys-pos-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 3px;
+}
+.sys-pos-key {
+  font-size: 0.52rem;
+  color: rgba(0,255,157,0.35);
+  letter-spacing: 0.12em;
+}
+.sys-pos-val {
+  font-size: 0.62rem;
+  color: var(--g);
+  letter-spacing: 0.08em;
+}
+
+/* System status rows */
+.sys-status-block {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--g-border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.sys-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.sys-status-key {
+  font-size: 0.52rem;
+  color: rgba(0,255,157,0.35);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.sys-status-val {
+  font-size: 0.56rem;
+  letter-spacing: 0.1em;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+}
+.sv-ok     { color: var(--g);      border-color: rgba(0,255,157,0.3);  background: rgba(0,255,157,0.06); }
+.sv-warn   { color: var(--orange); border-color: rgba(255,153,0,0.3);  background: rgba(255,153,0,0.06); }
+.sv-err    { color: var(--red);    border-color: rgba(255,60,60,0.3);  background: rgba(255,60,60,0.06); }
+.sv-idle   { color: rgba(0,255,157,0.35); border-color: rgba(0,255,157,0.12); }
+
+/* Intel Log */
+.sys-log-header {
+  padding: 7px 16px 5px;
+  font-size: 0.48rem;
+  letter-spacing: 0.22em;
+  color: rgba(0,255,157,0.30);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--g-border);
+  flex-shrink: 0;
+}
+
+#intel-log {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+}
+#intel-log::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 24px;
+  background: linear-gradient(to bottom, rgba(2,4,8,0.95), transparent);
+  z-index: 2; pointer-events: none;
+}
+#intel-log::after {
+  content: '';
+  position: absolute; bottom: 0; left: 0; right: 0; height: 32px;
+  background: linear-gradient(to top, rgba(2,4,8,0.95), transparent);
+  z-index: 2; pointer-events: none;
+}
+
+#intel-log-lines {
+  position: absolute;
+  bottom: 8px;          /* lines stack upward from bottom */
+  left: 0; right: 0;
+  display: flex;
+  flex-direction: column-reverse;
+  padding: 0 0 4px;
+  gap: 0;
+}
+
+.log-line {
+  padding: 3px 14px;
+  font-size: 0.51rem;
+  line-height: 1.55;
+  letter-spacing: 0.04em;
+  border-top: 1px solid rgba(0,255,157,0.04);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.log-line.show { opacity: 1; transform: translateY(0); }
+
+.log-sys  { color: rgba(0,255,157,0.30); }
+.log-sig  { color: var(--g); }
+.log-warn { color: var(--orange); }
+.log-alrt { color: var(--red); }
+.log-sat  { color: var(--lime); }
+.log-ship { color: var(--purple); }
+.log-air  { color: var(--cyan); }
+
+/* ═══════════════════════════════════════════════════════════
+   RIGHT SIDEBAR  —  [DATA_LAYERS]
+═══════════════════════════════════════════════════════════ */
+
+.layers-list {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--g-border);
+  flex-shrink: 0;
+}
+
+/* The glowing glass toggle button */
+.layer-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 13px;
+  border: 1px solid rgba(0,255,157,0.14);
+  border-radius: 3px;
+  background: rgba(0,255,157,0.03);
+  cursor: pointer;
+  transition: all 0.22s ease;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Glass sheen highlight */
+.layer-toggle::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 45%;
+  background: linear-gradient(to bottom, rgba(255,255,255,0.03), transparent);
+  pointer-events: none;
+}
+
+/* ENABLED state */
+.layer-toggle.enabled {
+  border-color: var(--g);
+  background: linear-gradient(135deg,
+    rgba(0,255,157,0.12) 0%,
+    rgba(0,255,157,0.05) 100%
+  );
+  box-shadow:
+    0 0 14px rgba(0,255,157,0.12),
+    inset 0 0 20px rgba(0,255,157,0.04);
+}
+.layer-toggle:hover {
+  border-color: rgba(0,255,157,0.40);
+  background: rgba(0,255,157,0.07);
+}
+
+.lt-left  { display: flex; align-items: center; gap: 9px; }
+.lt-icon  { font-size: 1rem; line-height: 1; flex-shrink: 0; }
+.lt-info  { display: flex; flex-direction: column; gap: 1px; }
+.lt-name  {
+  font-family: var(--font-hud);
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: rgba(0,255,157,0.50);
+  letter-spacing: 0.1em;
+  transition: color 0.2s, text-shadow 0.2s;
+}
+.layer-toggle.enabled .lt-name {
+  color: var(--g);
+  text-shadow: 0 0 8px var(--g-glow);
+}
+.lt-sub {
+  font-size: 0.46rem;
+  color: rgba(0,255,157,0.22);
+  letter-spacing: 0.06em;
+}
+.layer-toggle.enabled .lt-sub { color: rgba(0,255,157,0.40); }
+
+.lt-right { display: flex; align-items: center; gap: 7px; }
+
+.lt-count {
+  font-size: 0.52rem;
+  color: var(--g);
+  background: rgba(0,255,157,0.08);
+  border: 1px solid var(--g-border);
+  padding: 1px 6px;
+  border-radius: 2px;
+  min-width: 28px;
+  text-align: center;
+  transition: all 0.2s;
+}
+.layer-toggle:not(.enabled) .lt-count { color: rgba(0,255,157,0.25); border-color: rgba(0,255,157,0.08); }
+
+/* LED indicator */
+.lt-led {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: rgba(0,255,157,0.15);
+  border: 1px solid rgba(0,255,157,0.20);
+  transition: all 0.3s;
+  flex-shrink: 0;
+}
+.layer-toggle.enabled .lt-led {
+  background: var(--g);
+  border-color: var(--g);
+  box-shadow: 0 0 8px var(--g-glow), 0 0 16px rgba(0,255,157,0.3);
+  animation: ledPulse 2.5s ease-in-out infinite;
+}
+@keyframes ledPulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
+
+/* Selected object detail box */
+.detail-header {
+  padding: 7px 14px 5px;
+  font-size: 0.48rem;
+  letter-spacing: 0.22em;
+  color: rgba(0,255,157,0.30);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--g-border);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+#detail-box {
+  padding: 10px 12px;
+  flex-shrink: 0;
+  min-height: 120px;
+  border-bottom: 1px solid var(--g-border);
+}
+.detail-empty {
+  font-size: 0.56rem;
+  color: rgba(0,255,157,0.20);
+  text-align: center;
+  padding: 24px 0;
+  line-height: 2;
+}
+.detail-name {
+  font-family: var(--font-hud);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--g);
+  text-shadow: 0 0 8px var(--g-glow);
+  margin-bottom: 6px;
+}
+.detail-badge {
+  display: inline-block;
+  font-size: 0.48rem;
+  letter-spacing: 0.12em;
+  padding: 2px 7px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.dg-cell-label {
+  font-size: 0.45rem;
+  letter-spacing: 0.14em;
+  color: rgba(0,255,157,0.28);
+  text-transform: uppercase;
+  margin-bottom: 1px;
+}
+.dg-cell-value { font-size: 0.65rem; color: var(--g); }
+
+/* Active feed list */
+.feed-header {
+  padding: 6px 14px 4px;
+  font-size: 0.48rem;
+  letter-spacing: 0.22em;
+  color: rgba(0,255,157,0.30);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--g-border);
+  flex-shrink: 0;
+}
+#feed-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 3px 4px;
+  min-height: 0;
+}
+#feed-list::-webkit-scrollbar { width: 3px; }
+#feed-list::-webkit-scrollbar-thumb { background: var(--g-border); }
+
+.feed-item {
+  padding: 5px 9px;
+  border: 1px solid var(--g-border);
+  border-radius: 2px;
+  margin-bottom: 3px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: rgba(0,0,0,0.3);
+}
+.feed-item:hover  { background: var(--g-dim); border-color: var(--g-border2); }
+.feed-item.active { border-color: var(--g); background: var(--g-dim); box-shadow: 0 0 6px rgba(0,255,157,0.1); }
+.fi-name { font-family: var(--font-hud); font-size: 0.56rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fi-sub  { font-size: 0.47rem; color: rgba(0,255,157,0.30); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fi-tag  { display: inline-block; font-size: 0.43rem; letter-spacing: 0.08em; padding: 1px 4px; text-transform: uppercase; margin-top: 2px; }
+
+/* Tag colour helpers */
+.tag-air  { color: var(--cyan);   border: 1px solid rgba(0,212,255,0.3);  background: rgba(0,212,255,0.08); }
+.tag-mil  { color: var(--orange); border: 1px solid rgba(255,153,0,0.3);  background: rgba(255,153,0,0.08); }
+.tag-ship { color: var(--purple); border: 1px solid rgba(180,79,255,0.3); background: rgba(180,79,255,0.08); }
+.tag-sat  { color: var(--lime);   border: 1px solid rgba(200,255,0,0.3);  background: rgba(200,255,0,0.08); }
+.tag-geo  { color: var(--red);    border: 1px solid rgba(255,60,60,0.3);  background: rgba(255,60,60,0.08); }
+
+/* ═══════════════════════════════════════════════════════════
+   STATUS BAR
+═══════════════════════════════════════════════════════════ */
+#statusbar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: var(--statusbar-h);
+  background: rgba(2,4,8,0.97);
+  border-top: 1px solid var(--g-border);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 20px;
+  z-index: 500;
+  overflow: hidden;
+}
+.sb-stat {
+  font-size: 0.50rem;
+  letter-spacing: 0.1em;
+  color: rgba(0,255,157,0.28);
+  white-space: nowrap;
+}
+.sb-stat span { color: var(--g); }
+.sb-stat.warn span { color: var(--orange); }
+
+/* ═══════════════════════════════════════════════════════════
+   SIDEBAR COLLAPSE TOGGLES (edge tabs)
+═══════════════════════════════════════════════════════════ */
+.sidebar-tab {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px; height: 52px;
+  background: rgba(2,4,8,0.95);
+  border: 1px solid var(--g-border);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  z-index: 401;
+  font-size: 0.5rem;
+  color: rgba(0,255,157,0.4);
+  transition: left 0.3s, right 0.3s, color 0.2s;
+}
+.sidebar-tab:hover { color: var(--g); border-color: var(--g); }
+
+#tab-left  { left: var(--sidebar-w); border-left: none; }
+#tab-right { right: var(--sidebar-w); border-right: none; }
+
+#tab-left.hidden  { left: 0; }
+#tab-right.hidden { right: 0; }
+
+/* ═══════════════════════════════════════════════════════════
+   VIBE MODE INDICATOR (top-right corner overlay)
+═══════════════════════════════════════════════════════════ */
+#vibe-indicator {
+  position: fixed;
+  bottom: 32px;
+  right: calc(var(--sidebar-w) + 12px);
+  font-size: 0.48rem;
+  letter-spacing: 0.16em;
+  color: rgba(0,255,157,0.30);
+  z-index: 300;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+#vibe-indicator span { color: var(--g); }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════
+     GLOBE
+════════════════════════════════════════════ -->
+<div id="cesiumContainer"></div>
+
+<!-- ════════════════════════════════════════════
+     TOPBAR
+════════════════════════════════════════════ -->
+<div id="topbar">
+  <div class="tb-logo">
+    <div class="tb-eye"></div>
+    OPENEYE
+  </div>
+  <div class="tb-divider"></div>
+  <div class="tb-center">
+    <div id="tb-utc">UTC 00:00:00</div>
+    <div class="tb-divider"></div>
+    <div id="tb-coords">LAT — · LON — · ALT —</div>
+  </div>
+  <div class="tb-right">
+    <div class="tb-live"><div class="tb-live-dot"></div>LIVE</div>
+    <button class="hud-btn" onclick="CAM.flyToRegion()">🌍 REGION</button>
+    <button class="hud-btn" onclick="CAM.flyToBangladesh()">🎯 DHAKA</button>
+    <button class="hud-btn" id="btn-nightvision" onclick="SHADER.toggle()">🌙 NIGHT VIS</button>
+    <button class="hud-btn" onclick="document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()">⛶</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     LEFT SIDEBAR  [SYSTEM_STATUS]
+════════════════════════════════════════════ -->
+<div class="sidebar" id="sidebar-left">
+
+  <div class="sb-section-hdr">
+    <div class="sb-section-tag">Module 01</div>
+    <div class="sb-section-title">SYSTEM_STATUS</div>
+  </div>
+
+  <!-- Clock -->
+  <div class="sys-clock">
+    <div class="sys-clock-label">// UTC Time</div>
+    <div id="sys-time">00:00:00</div>
+    <div id="sys-date">INITIALIZING...</div>
+  </div>
+
+  <!-- Camera position -->
+  <div class="sys-position">
+    <div class="sys-pos-label">// Cursor Position</div>
+    <div class="sys-pos-row">
+      <span class="sys-pos-key">LAT</span>
+      <span class="sys-pos-val" id="pos-lat">——.——°</span>
+    </div>
+    <div class="sys-pos-row">
+      <span class="sys-pos-key">LON</span>
+      <span class="sys-pos-val" id="pos-lon">——.——°</span>
+    </div>
+    <div class="sys-pos-row">
+      <span class="sys-pos-key">CAM ALT</span>
+      <span class="sys-pos-val" id="pos-alt">——— km</span>
+    </div>
+  </div>
+
+  <!-- System status -->
+  <div class="sys-status-block">
+    <div class="sys-status-row">
+      <span class="sys-status-key">Globe</span>
+      <span class="sys-status-val sv-idle" id="st-globe">LOADING</span>
+    </div>
+    <div class="sys-status-row">
+      <span class="sys-status-key">Shader</span>
+      <span class="sys-status-val sv-idle" id="st-shader">STANDBY</span>
+    </div>
+    <div class="sys-status-row">
+      <span class="sys-status-key">Aviation</span>
+      <span class="sys-status-val sv-idle" id="st-aviation">IDLE</span>
+    </div>
+    <div class="sys-status-row">
+      <span class="sys-status-key">Maritime</span>
+      <span class="sys-status-val sv-idle" id="st-maritime">IDLE</span>
+    </div>
+    <div class="sys-status-row">
+      <span class="sys-status-key">Satellite</span>
+      <span class="sys-status-val sv-idle" id="st-satellite">IDLE</span>
+    </div>
+    <div class="sys-status-row">
+      <span class="sys-status-key">Fires</span>
+      <span class="sys-status-val sv-idle" id="st-fires">IDLE</span>
+    </div>
+    <div class="sys-status-row">
+      <span class="sys-status-key">Weather</span>
+      <span class="sys-status-val sv-idle" id="st-weather">IDLE</span>
+    </div>
+  </div>
+
+  <!-- Intel log header -->
+  <div class="sys-log-header">// Intel Log</div>
+
+  <!-- Scrolling intel log -->
+  <div id="intel-log">
+    <div id="intel-log-lines"></div>
+  </div>
+
+</div>
+<div class="sidebar-tab" id="tab-left" onclick="UI.toggleSidebar('left')">◀</div>
+
+<!-- ════════════════════════════════════════════
+     RIGHT SIDEBAR  [DATA_LAYERS]
+════════════════════════════════════════════ -->
+<div class="sidebar" id="sidebar-right">
+
+  <div class="sb-section-hdr">
+    <div class="sb-section-tag">Module 02</div>
+    <div class="sb-section-title">DATA_LAYERS</div>
+  </div>
+
+  <!-- Layer toggles -->
+  <div class="layers-list" id="layer-toggles">
+    <!-- Populated by LAYER_REGISTRY.renderToggles() -->
+  </div>
+
+  <!-- Selected object detail -->
+  <div class="detail-header">// Selected Object</div>
+  <div id="detail-box">
+    <div class="detail-empty">Click any object<br>on the globe</div>
+  </div>
+
+  <!-- Active feed -->
+  <div class="feed-header">// Active Feed — <span id="feed-count" style="color:var(--g)">0</span> objects</div>
+  <div id="feed-list">
+    <div style="padding:14px;font-size:0.54rem;color:rgba(0,255,157,0.2);text-align:center">
+      Layers inactive
+    </div>
+  </div>
+
+</div>
+<div class="sidebar-tab" id="tab-right" onclick="UI.toggleSidebar('right')">▶</div>
+
+<!-- ════════════════════════════════════════════
+     STATUS BAR
+════════════════════════════════════════════ -->
+<div id="statusbar">
+  <div class="sb-stat">OPENEYE <span>v4.0</span></div>
+  <div class="sb-stat">ENGINE <span>CESIUM 1.116</span></div>
+  <div class="sb-stat" id="sb-flights">FLIGHTS <span>—</span></div>
+  <div class="sb-stat" id="sb-ships">VESSELS <span>—</span></div>
+  <div class="sb-stat" id="sb-sats">SATS <span>—</span></div>
+  <div class="sb-stat" id="sb-fires">FIRES <span>—</span></div>
+  <div class="sb-stat" id="sb-updated">UPDATED <span>—</span></div>
+  <div class="sb-stat warn" id="sb-demo" style="display:none">MODE <span>DEMO</span></div>
+</div>
+
+<!-- Vibe indicator -->
+<div id="vibe-indicator">VIBE <span id="vibe-label">NORMAL</span></div>
+
+
+<!-- ════════════════════════════════════════════════════════════
+     JAVASCRIPT
+════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  OpenEye v4.0 — Foundation Module                           ║
+// ║  Architecture: LAYER_REGISTRY + SHADER + UI + CAM           ║
+// ║  Next: Inject AVIATION_MODULE, MARITIME_MODULE, SAT_MODULE  ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+// ──────────────────────────────────────────────────────────────
+// 🔑  TOKEN  — paste your Cesium Ion key here
+//     Free at: https://ion.cesium.com/tokens
+// ──────────────────────────────────────────────────────────────
+const CESIUM_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJmNDUyNGRjYy0xMzBlLTQ1YWUtYTM2Yy1mOThhNzI4MzAwY2IiLCJpZCI6Mzk5MjYwLCJpYXQiOjE3NzI4MjgxMzJ9.o-PgYk8GEbN_AdQi8U-qgIXt2FOagAw4aya6_87PgN8';
+Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
+
+
+// ══════════════════════════════════════════════════════════════
+// 1.  VIEWER INITIALISATION
+//     globe:false          → Google 3D Tiles replace the globe
+//     orderIndependentTranslucency:false → fixes GPU tile glitch
+// ══════════════════════════════════════════════════════════════
+const viewer = new Cesium.Viewer('cesiumContainer', {
+  globe:                        false,
+  orderIndependentTranslucency: false,
+  baseLayerPicker:              false,
+  geocoder:                     false,
+  homeButton:                   false,
+  sceneModePicker:              false,
+  navigationHelpButton:         false,
+  animation:                    false,
+  timeline:                     false,
+  fullscreenButton:             false,
+  infoBox:                      false,
+  selectionIndicator:           false,
+  creditContainer: (() => {
+    const d = document.createElement('div');
+    d.style.display = 'none';
+    document.body.appendChild(d);
+    return d;
+  })(),
+});
+
+const scene = viewer.scene;
+scene.backgroundColor    = new Cesium.Color(0.008, 0.016, 0.031, 1.0); // #020408
+scene.skyAtmosphere.show = true;
+scene.fog.enabled        = true;
+scene.fog.density        = 0.00007;
+
+
+// ══════════════════════════════════════════════════════════════
+// 2.  MAP LAYER
+//     Layer order (back → front):
+//       [1] Cesium World Imagery (Ion asset 3)  — labels, roads, borders
+//           alpha:0.5 so it does not overpower the 3D tile texture
+//       [2] Google Photorealistic 3D Tiles — buildings + terrain mesh
+//     Night Vision shader tints the whole composited frame green.
+// ══════════════════════════════════════════════════════════════
+async function LOAD_MAP() {
+
+  // Step 1 — Cesium World Imagery: labels, roads, country borders
+  try {
+    const labelProvider   = await Cesium.IonImageryProvider.fromAssetId(3);
+    const labelLayer      = scene.imageryLayers.addImageryProvider(labelProvider);
+    labelLayer.show       = true;
+    labelLayer.alpha      = 0.5;
+    labelLayer.brightness = 0.9;
+    labelLayer.contrast   = 1.2;
+    window._labelLayer    = labelLayer;
+    LOG.add('[MAP] Cesium World Imagery — labels/roads/borders ONLINE', 'sig');
+  } catch (err) {
+    LOG.add(`[MAP] Label layer unavailable — ${err.message}`, 'warn');
+  }
+
+  // Step 2 — Google Photorealistic 3D Tiles
+  try {
+    LOG.add('[SYS] Requesting Google Photorealistic 3D Tiles...', 'sys');
+    const tileset = await Cesium.createGooglePhotorealistic3DTileset();
+    scene.primitives.add(tileset);
+    LOG.add('[MAP] Google 3D Tiles active — photorealistic globe ONLINE', 'sig');
+    UI.setStatus('globe', 'ONLINE', 'ok');
+  } catch (err) {
+    console.warn('Google 3D Tiles failed:', err.message);
+    LOG.add('[WARN] Google 3D Tiles failed — activating Esri Street fallback', 'warn');
+    UI.setStatus('globe', 'FALLBACK', 'warn');
+    scene.globe = new Cesium.Globe(scene.ellipsoid);
+    scene.globe.enableLighting       = true;
+    scene.globe.showGroundAtmosphere = true;
+    scene.imageryLayers.addImageryProvider(
+      new Cesium.UrlTemplateImageryProvider({
+        url:          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+        maximumLevel: 19,
+        credit:       'Esri World Street Map',
+      })
+    );
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════
+// 3.  LAYER REGISTRY
+//     Each layer owns:
+//       enabled   — bool, toggled by the UI button
+//       label     — display name
+//       icon      — emoji
+//       source    — data source name shown in sub-label
+//       entities  — Cesium.CustomDataSource (own namespace)
+//       count     — how many entities are currently loaded
+//       refresh() — async fn to fetch + render data (injected by module)
+//       clear()   — removes all entities from the globe
+// ══════════════════════════════════════════════════════════════
+const LAYER_REGISTRY = {
+
+  AVIATION: {
+    id:       'AVIATION',
+    label:    'Aviation',
+    icon:     '✈',
+    source:   'OpenSky + ADSB.lol',
+    enabled:  true,
+    count:    0,
+    entities: new Cesium.CustomDataSource('aviation'),
+    // refresh() will be injected by AVIATION_MODULE
+    refresh:  async () => { LOG.add('[SYS] Aviation module not loaded yet', 'warn'); },
+    clear() {
+      this.entities.entities.removeAll();
+      this.count = 0;
+      LAYER_REGISTRY._sync(this.id);
+    },
+  },
+
+  MARITIME: {
+    id:       'MARITIME',
+    label:    'Maritime',
+    icon:     '🚢',
+    source:   'AISHub + VTExplorer',
+    enabled:  true,
+    count:    0,
+    entities: new Cesium.CustomDataSource('maritime'),
+    refresh:  async () => { LOG.add('[SYS] Maritime module not loaded yet', 'warn'); },
+    clear() {
+      this.entities.entities.removeAll();
+      this.count = 0;
+      LAYER_REGISTRY._sync(this.id);
+    },
+  },
+
+  SATELLITE: {
+    id:       'SATELLITE',
+    label:    'Satellites',
+    icon:     '🛰',
+    source:   'Celestrak TLE / NORAD',
+    enabled:  true,
+    count:    0,
+    entities: new Cesium.CustomDataSource('satellite'),
+    refresh:  async () => { LOG.add('[SYS] Satellite module not loaded yet', 'warn'); },
+    clear() {
+      this.entities.entities.removeAll();
+      this.count = 0;
+      LAYER_REGISTRY._sync(this.id);
+    },
+  },
+
+  ENVIRONMENT: {
+    id:       'ENVIRONMENT',
+    label:    'Environment',
+    icon:     '🌡',
+    source:   'NASA FIRMS + RainViewer',
+    enabled:  true,
+    count:    0,
+    entities: new Cesium.CustomDataSource('environment'),
+    refresh:  async () => { LOG.add('[SYS] Environment module not loaded yet', 'warn'); },
+    clear() {
+      this.entities.entities.removeAll();
+      this.count = 0;
+      LAYER_REGISTRY._sync(this.id);
+    },
+  },
+
+  // ── Internal helpers ─────────────────────────────────────
+  _all() {
+    return [this.AVIATION, this.MARITIME, this.SATELLITE, this.ENVIRONMENT];
+  },
+
+  // Add every CustomDataSource to the viewer
+  _mount() {
+    this._all().forEach(layer => {
+      viewer.dataSources.add(layer.entities);
+      layer.entities.show = layer.enabled;
+    });
+  },
+
+  // Toggle a layer on/off
+  toggle(id) {
+    const layer = this[id];
+    if (!layer) return;
+    layer.enabled = !layer.enabled;
+    layer.entities.show = layer.enabled;
+    this._sync(id);
+    LOG.add(
+      `[LAYER] ${layer.label} ${layer.enabled ? 'ENABLED' : 'DISABLED'}`,
+      layer.enabled ? 'sig' : 'sys'
+    );
+  },
+
+  // Update the DOM toggle button + count badge + status light
+  _sync(id) {
+    const layer = this[id];
+    const btn   = document.getElementById(`toggle-${id}`);
+    if (!btn) return;
+    btn.classList.toggle('enabled', layer.enabled);
+    const countEl = btn.querySelector('.lt-count');
+    if (countEl) countEl.textContent = layer.count || '—';
+    UI.refreshStatusBar();
+  },
+
+  // Render all toggle buttons into the right sidebar
+  renderToggles() {
+    const container = document.getElementById('layer-toggles');
+    if (!container) return;
+    container.innerHTML = '';
+    this._all().forEach(layer => {
+      const btn = document.createElement('div');
+      btn.className = `layer-toggle ${layer.enabled ? 'enabled' : ''}`;
+      btn.id        = `toggle-${layer.id}`;
+      btn.innerHTML = `
+        <div class="lt-left">
+          <span class="lt-icon">${layer.icon}</span>
+          <div class="lt-info">
+            <span class="lt-name">${layer.label}</span>
+            <span class="lt-sub">${layer.source}</span>
+          </div>
+        </div>
+        <div class="lt-right">
+          <span class="lt-count">—</span>
+          <span class="lt-led"></span>
+        </div>`;
+      btn.addEventListener('click', () => LAYER_REGISTRY.toggle(layer.id));
+      container.appendChild(btn);
+    });
+  },
+
+  // Call refresh() on all enabled layers
+  async refreshAll() {
+    for (const layer of this._all()) {
+      if (layer.enabled) {
+        try { await layer.refresh(); }
+        catch(e) { console.error(`Layer ${layer.id} refresh failed:`, e); }
+      }
+    }
+    UI.refreshStatusBar();
+  },
+};
+
+
+// ══════════════════════════════════════════════════════════════
+// 4.  SHADER MODULE
+//     vibeMode controls which post-process stage is active:
+//       'NORMAL'     → no post-processing
+//       'NIGHTVISION'→ green tint + scanlines + vignette
+//     SHADER.toggle() cycles through modes
+// ══════════════════════════════════════════════════════════════
+const SHADER = (() => {
+
+  // The single fragment shader — handles both tint, scanlines, vignette
+  const NIGHTVISION_GLSL = `
+    uniform sampler2D colorTexture;
+    in vec2 v_textureCoordinates;
+
+    void main(void) {
+      // 1. Sample current rendered frame
+      vec4 src = texture(colorTexture, v_textureCoordinates);
+
+      // 2. Desaturate first so we start from luminance
+      float luma = dot(src.rgb, vec3(0.299, 0.587, 0.114));
+
+      // 3. Green tint  — vec3(0.0, 1.0, 0.4)
+      vec3 tinted = luma * vec3(0.0, 1.0, 0.4);
+
+      // 4. Moving horizontal scanlines (czm_frameNumber drives scroll)
+      float scrollY   = v_textureCoordinates.y
+                      + float(czm_frameNumber) * 0.003;
+      float linePhase = fract(scrollY * czm_viewport.w / 3.0);
+      float scanline  = mix(0.65, 1.0, step(0.55, linePhase));
+      tinted *= scanline;
+
+      // 5. Radial vignette
+      vec2  uv      = v_textureCoordinates - 0.5;
+      float vignette = 1.0 - smoothstep(0.22, 0.58, dot(uv, uv) * 2.2);
+      tinted *= vignette;
+
+      // 6. Slight brightness boost so the map stays legible
+      tinted *= 1.25;
+
+      out_FragColor = vec4(tinted, src.a);
+    }
+  `;
+
+  let _stage  = null;
+  let _active = false;
+
+  function _install() {
+    if (_stage) return; // already installed
+    try {
+      _stage = new Cesium.PostProcessStage({
+        fragmentShader: NIGHTVISION_GLSL,
+        name:           'openeye_nightvision',
+      });
+      _stage.enabled = false;
+      scene.postProcessStages.add(_stage);
+      UI.setStatus('shader', 'READY', 'ok');
+      LOG.add('[SHADER] Night-vision stage installed', 'sig');
+    } catch(e) {
+      console.warn('Shader install failed:', e.message);
+      UI.setStatus('shader', 'NO GPU', 'warn');
+      LOG.add('[SHADER] Post-process unavailable on this GPU', 'warn');
+    }
+  }
+
+  function toggle() {
+    if (!_stage) { LOG.add('[SHADER] Stage not ready', 'warn'); return; }
+    _active = !_active;
+    _stage.enabled = _active;
+
+    const btn = document.getElementById('btn-nightvision');
+    const lbl = document.getElementById('vibe-label');
+
+    if (_active) {
+      btn && btn.classList.add('active');
+      lbl && (lbl.textContent = 'NIGHT VISION');
+      UI.setStatus('shader', 'ACTIVE', 'ok');
+      LOG.add('[SHADER] Night-vision ON', 'sig');
+    } else {
+      btn && btn.classList.remove('active');
+      lbl && (lbl.textContent = 'NORMAL');
+      UI.setStatus('shader', 'READY', 'ok');
+      LOG.add('[SHADER] Night-vision OFF', 'sys');
+    }
+  }
+
+  return { install: _install, toggle };
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// 5.  CAMERA MODULE
+// ══════════════════════════════════════════════════════════════
+const CAM = {
+  // Default boot position — South Asia, 5 000 km altitude
+  flyToRegion() {
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(78.9, 20.5, 5_000_000),
+      orientation: {
+        heading: Cesium.Math.toRadians(0),
+        pitch:   Cesium.Math.toRadians(-42),
+        roll:    0,
+      },
+      duration:       3.5,
+      easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+    });
+  },
+
+  flyToBangladesh() {
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(90.356, 23.685, 600_000),
+      orientation: {
+        heading: Cesium.Math.toRadians(0),
+        pitch:   Cesium.Math.toRadians(-45),
+        roll:    0,
+      },
+      duration:       2.5,
+      easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+    });
+  },
+
+  flyTo(lon, lat, alt = 200_000) {
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(lon, lat, alt),
+      orientation: {
+        heading: 0,
+        pitch:   Cesium.Math.toRadians(-42),
+        roll:    0,
+      },
+      duration: 1.8,
+    });
+  },
+};
+
+
+// ══════════════════════════════════════════════════════════════
+// 6.  UI MODULE — clock, coords, status, sidebar toggles
+// ══════════════════════════════════════════════════════════════
+const UI = {
+  _leftOpen:  true,
+  _rightOpen: true,
+
+  // Clock tick
+  _tick() {
+    const now = new Date();
+    const p   = v => String(v).padStart(2,'0');
+    const MON = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+
+    document.getElementById('sys-time').textContent =
+      `${p(now.getUTCHours())}:${p(now.getUTCMinutes())}:${p(now.getUTCSeconds())}`;
+    document.getElementById('sys-date').textContent =
+      `${p(now.getUTCDate())} ${MON[now.getUTCMonth()]} ${now.getUTCFullYear()} UTC`;
+    document.getElementById('tb-utc').textContent =
+      `UTC ${p(now.getUTCHours())}:${p(now.getUTCMinutes())}:${p(now.getUTCSeconds())}`;
+  },
+
+  startClock() { setInterval(() => this._tick(), 1000); this._tick(); },
+
+  // Mouse coordinate tracker
+  startCoords() {
+    const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
+    handler.setInputAction(evt => {
+      try {
+        let cart = scene.globe
+          ? viewer.camera.pickEllipsoid(evt.endPosition, scene.globe.ellipsoid)
+          : scene.pickPosition(evt.endPosition);
+
+        if (cart) {
+          const c   = Cesium.Cartographic.fromCartesian(cart);
+          const lat = Cesium.Math.toDegrees(c.latitude).toFixed(4);
+          const lon = Cesium.Math.toDegrees(c.longitude).toFixed(4);
+          const alt = Math.round(
+            viewer.camera.positionCartographic.height / 1000
+          ).toLocaleString();
+
+          document.getElementById('pos-lat').textContent   = `${lat}°`;
+          document.getElementById('pos-lon').textContent   = `${lon}°`;
+          document.getElementById('pos-alt').textContent   = `${alt} km`;
+          document.getElementById('tb-coords').textContent =
+            `LAT ${lat} · LON ${lon} · ALT ${alt} km`;
+          document.getElementById('pos-alt').textContent   = `${alt} km`;
+        }
+      } catch(e) {}
+    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+  },
+
+  // ── Selected entity state ────────────────────────────────────
+  _selected:   null,    // currently selected entity
+  _vecEntity:  null,    // heading-vector polyline entity
+  _vecDS:      null,    // DataSource for vector overlay
+  _trackTimer: null,    // setInterval handle for live tracking
+
+  // Globe click → pick entity, show detail, draw vector, start tracker
+  startClickHandler() {
+    const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
+    handler.setInputAction(click => {
+      const picked = scene.pick(click.position);
+      if (Cesium.defined(picked) && picked.id) {
+        const entity = picked.id;
+        if (entity._oeData) {
+          UI._selectEntity(entity);
+        }
+      } else {
+        // Click on empty space — deselect
+        UI._clearSelection();
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    // Create overlay DataSource for vector lines
+    UI._vecDS = new Cesium.CustomDataSource('_vector_overlay');
+    viewer.dataSources.add(UI._vecDS);
+  },
+
+  _selectEntity(entity) {
+    UI._clearSelection();
+    UI._selected = entity;
+    UI.showDetail(entity._oeData);
+    UI._drawVector(entity);
+
+    // Live update: refresh detail + redraw vector every 1s
+    UI._trackTimer = setInterval(() => {
+      if (!UI._selected) return;
+      // Re-read _oeData (dead-reckoning updates it)
+      if (UI._selected._oeData) UI.showDetail(UI._selected._oeData);
+      UI._drawVector(UI._selected);
+    }, 1000);
+  },
+
+  _clearSelection() {
+    if (UI._trackTimer) { clearInterval(UI._trackTimer); UI._trackTimer = null; }
+    if (UI._vecDS)      UI._vecDS.entities.removeAll();
+    UI._selected  = null;
+    UI._vecEntity = null;
+  },
+
+  _drawVector(entity) {
+    if (!UI._vecDS) return;
+    UI._vecDS.entities.removeAll();
+    try {
+      const d    = entity._oeData;
+      if (!d)    return;
+      const pos  = entity.position?.getValue(Cesium.JulianDate.now());
+      if (!pos)  return;
+      const carto = Cesium.Cartographic.fromCartesian(pos);
+      const lat   = Cesium.Math.toDegrees(carto.latitude);
+      const lon   = Cesium.Math.toDegrees(carto.longitude);
+      const alt   = carto.height;
+
+      // Direction + speed
+      const hdg     = d.heading ?? d.cog ?? 0;
+      const spd     = d.type === 'satellite' ? 7800    // satellites ~7.8km/s
+                    : d.type === 'ship'      ? (d.sog || 0) * 0.514444  // knots → m/s
+                    : ((d.velocity || 0) / 3.6);        // aircraft km/h → m/s
+      const dt      = d.type === 'satellite' ? 120     // 2 min preview
+                    : d.type === 'ship'      ? 1800    // 30 min preview
+                    : 120;                              // 2 min preview
+      const dist    = spd * dt;
+      if (dist < 100) return;  // stationary — no vector
+
+      const R      = 6371000;
+      const hdgRad = (hdg * Math.PI) / 180;
+      const latRad = lat * Math.PI / 180;
+      const vecLat = lat + (dist / R) * Math.cos(hdgRad) * (180 / Math.PI);
+      const vecLon = lon + (dist / R) / Math.cos(latRad) * Math.sin(hdgRad) * (180 / Math.PI);
+      const vecAlt = d.type === 'satellite' ? alt : alt; // same altitude
+
+      // Vector line colour from entity type
+      const col = d.classification === 'MILITARY' ? '#ff9900'
+                : d.type === 'satellite'           ? (d.color || '#00ff9d')
+                : d.type === 'ship'                ? '#00d4ff'
+                : '#00ff9d';
+
+      // Draw heading vector polyline
+      UI._vecDS.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArrayHeights([
+            lon, lat, alt,
+            vecLon, vecLat, vecAlt,
+          ]),
+          width: 2,
+          material: new Cesium.PolylineArrowMaterialProperty(
+            Cesium.Color.fromCssColorString(col).withAlpha(0.9)
+          ),
+          clampToGround: false,
+          arcType: Cesium.ArcType.NONE,
+        },
+      });
+
+      // Draw selection ring around entity
+      UI._vecDS.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(lon, lat, alt + 50),
+        ellipse: {
+          semiMajorAxis: 18000,
+          semiMinorAxis: 18000,
+          material: Cesium.Color.fromCssColorString(col).withAlpha(0.0),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString(col).withAlpha(0.7),
+          outlineWidth: 2,
+          height: alt,
+          heightReference: Cesium.HeightReference.NONE,
+        },
+      });
+    } catch(e) { /* never crash the tracker */ }
+  },
+
+  // Update a system status badge
+  setStatus(key, text, level = 'idle') {
+    const el = document.getElementById(`st-${key}`);
+    if (!el) return;
+    el.textContent = text;
+    el.className   = `sys-status-val sv-${level}`;
+  },
+
+  // Refresh status bar counts
+  refreshStatusBar() {
+    const av  = LAYER_REGISTRY.AVIATION.count;
+    const ma  = LAYER_REGISTRY.MARITIME.count;
+    const sat = LAYER_REGISTRY.SATELLITE.count;
+    document.getElementById('sb-flights').innerHTML  = `FLIGHTS <span>${av || '—'}</span>`;
+    document.getElementById('sb-ships').innerHTML    = `VESSELS <span>${ma || '—'}</span>`;
+    document.getElementById('sb-sats').innerHTML     = `SATS <span>${sat || '—'}</span>`;
+    document.getElementById('sb-updated').innerHTML  =
+      `UPDATED <span>${new Date().toLocaleTimeString('en',{hour12:false})}</span>`;
+    document.getElementById('feed-count').textContent =
+      (av + ma + sat) || '0';
+  },
+
+  // Show object detail in right sidebar
+  showDetail(data) {
+    const renderer = DETAIL_RENDERERS[data.type];
+    const box = document.getElementById('detail-box');
+    if (!box) return;
+    const liveBar = UI._selected
+      ? `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+           <span style="width:6px;height:6px;border-radius:50%;background:#00ff9d;box-shadow:0 0 6px #00ff9d;animation:pulse 1s infinite"></span>
+           <span style="font-size:0.48rem;color:rgba(0,255,157,0.6);letter-spacing:.1em">TRACKING LIVE</span>
+           <span style="margin-left:auto;font-size:0.46rem;color:rgba(0,255,157,0.35);cursor:pointer"
+                 onclick="UI._clearSelection()">✕ DESELECT</span>
+         </div>` : '';
+    if (renderer) {
+      box.innerHTML = liveBar + renderer(data);
+    } else {
+      box.innerHTML = liveBar + `<div class="detail-name">${data.id}</div>`;
+    }
+  },
+
+  // Sidebar collapse / expand
+  toggleSidebar(side) {
+    const sb  = document.getElementById(`sidebar-${side}`);
+    const tab = document.getElementById(`tab-${side}`);
+    if (side === 'left') {
+      this._leftOpen = !this._leftOpen;
+      sb.classList.toggle('hidden', !this._leftOpen);
+      tab.classList.toggle('hidden', !this._leftOpen);
+      tab.textContent = this._leftOpen ? '◀' : '▶';
+    } else {
+      this._rightOpen = !this._rightOpen;
+      sb.classList.toggle('hidden', !this._rightOpen);
+      tab.classList.toggle('hidden', !this._rightOpen);
+      tab.textContent = this._rightOpen ? '▶' : '◀';
+    }
+  },
+
+  // Push items into the feed list
+  renderFeed(items) {
+    const list = document.getElementById('feed-list');
+    if (!items || !items.length) {
+      list.innerHTML = `<div style="padding:14px;font-size:0.54rem;color:rgba(0,255,157,0.2);text-align:center">No data</div>`;
+      return;
+    }
+    list.innerHTML = items.slice(0, 100).map(item => `
+      <div class="feed-item" onclick="CAM.flyTo(${item.lon},${item.lat},${item.feedAlt||200000})">
+        <div class="fi-name" style="color:${item.color||'var(--g)'}">${item.name}</div>
+        <div class="fi-sub">${item.sub||''}</div>
+        <span class="fi-tag ${item.tag||'tag-air'}">${item.tagLabel||item.type}</span>
+      </div>`
+    ).join('');
+  },
+};
+
+
+// ══════════════════════════════════════════════════════════════
+// 7.  INTEL LOG MODULE
+//     LOG.add(text, cls)  — prepends a line to the left sidebar log
+//     LOG.boot()          — runs the startup sequence
+// ══════════════════════════════════════════════════════════════
+const LOG = (() => {
+  const MAX = 18;
+  const container = () => document.getElementById('intel-log-lines');
+
+  function add(text, cls = 'sys') {
+    const el = document.createElement('div');
+    el.className = `log-line log-${cls}`;
+    el.textContent = text;
+    const c = container();
+    if (!c) return;
+    // Prepend (newest at top since column-reverse)
+    c.insertBefore(el, c.firstChild);
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
+    // Prune oldest
+    const lines = c.querySelectorAll('.log-line');
+    if (lines.length > MAX) {
+      const old = lines[lines.length - 1];
+      old.classList.remove('show');
+      setTimeout(() => old.remove(), 400);
+    }
+  }
+
+  const BOOT_SEQUENCE = [
+    { text: '[SYS] OPENEYE TACTICAL v4.0 INITIALIZING...', cls: 'sys',  delay: 0   },
+    { text: '[SYS] CesiumJS 1.116 engine loaded',           cls: 'sys',  delay: 300 },
+    { text: '[SYS] LAYER_REGISTRY mounted — 3 layers',      cls: 'sys',  delay: 600 },
+    { text: '[MAP] Requesting Google Photorealistic Tiles',  cls: 'sig',  delay: 900 },
+    { text: '[CAM] Flying to South Asia sector...',          cls: 'sig',  delay: 1400},
+    { text: '[SHADER] Night-vision stage ready',             cls: 'sig',  delay: 1800},
+    { text: '[SYS] Awaiting module injection',               cls: 'sys',  delay: 2400},
+    { text: '[SYS] FOUNDATION READY',                        cls: 'sig',  delay: 3000},
+  ];
+
+  function boot() {
+    BOOT_SEQUENCE.forEach(({ text, cls, delay }) =>
+      setTimeout(() => add(text, cls), delay)
+    );
+  }
+
+  // Continuous ambient log after boot
+  const AMBIENT = [
+    { text: '[SYS] ADS-B receiver polling South Asia sector', cls: 'sys'  },
+    { text: '[SIGINT] Bay of Bengal — AIS nominal',            cls: 'sig'  },
+    { text: '[SAT] CARTOSAT-3 overhead in 4 min',             cls: 'sat'  },
+    { text: '[WARN] High traffic density — Mumbai TMA',        cls: 'warn' },
+    { text: '[SYS] Cross-referencing MMSI database',           cls: 'sys'  },
+    { text: '[SHIP] MT Arabian Star — transit Arabian Sea',    cls: 'ship' },
+    { text: '[SYS] Ephemeris data updated from Celestrak',     cls: 'sys'  },
+    { text: '[SIGINT] BAF001 airborne — callsign confirmed',   cls: 'air'  },
+    { text: '[SAT] ISS pass — visible from Dhaka in 7 min',   cls: 'sat'  },
+    { text: '[SYS] LAYER_REGISTRY refresh cycle complete',     cls: 'sys'  },
+    { text: '[WARN] LoC sector — elevated ADS-B contacts',     cls: 'warn' },
+    { text: '[SHIP] MV Chittagong Express — inbound BGCGP',    cls: 'ship' },
+    { text: '[SIGINT] STARLINK-1007 overhead — relay OK',      cls: 'air'  },
+    { text: '[SYS] Conflict boundary cache refreshed',         cls: 'sys'  },
+  ];
+  let _ambientIdx = 0;
+  function startAmbient() {
+    setInterval(() => {
+      const entry = AMBIENT[_ambientIdx % AMBIENT.length];
+      add(entry.text, entry.cls);
+      _ambientIdx++;
+    }, 4500);
+  }
+
+  return { add, boot, startAmbient };
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// 8.  DETAIL RENDERERS
+//     Each module registers its own renderer here:
+//       DETAIL_RENDERERS['flight'] = (data) => '<html>...'
+//     Foundation provides empty defaults.
+// ══════════════════════════════════════════════════════════════
+const DETAIL_RENDERERS = {
+  // Injected by AVIATION_MODULE:
+  flight: null,
+  // Injected by MARITIME_MODULE:
+  ship:   null,
+  // Injected by SATELLITE_MODULE:
+  satellite: null,
+};
+
+
+// ══════════════════════════════════════════════════════════════
+// 9.  GLOBAL REFRESH LOOP
+//     Every 60 s, refreshAll() fires — each module re-fetches
+//     its data and re-renders its entities.
+// ══════════════════════════════════════════════════════════════
+let _refreshTimer = null;
+
+function startRefreshLoop(intervalMs = 60_000) {
+  if (_refreshTimer) clearInterval(_refreshTimer);
+  _refreshTimer = setInterval(() => {
+    LOG.add('[SYS] Refresh cycle triggered', 'sys');
+    LAYER_REGISTRY.refreshAll();
+  }, intervalMs);
+}
+
+
+// ══════════════════════════════════════════════════════════════
+// 10. NAV_CONTROLLER — Camera Navigation Module
+//     Fixes all four issues Gemini identified:
+//       (1) Jumpy zoom       → smooth tweened zoom
+//       (2) Goes underground → collision detection + hard floor
+//       (3) Upside-down      → pitch clamped to [-PI/2, -0.01]
+//       (4) Zoom target      → always toward screen centre
+// ══════════════════════════════════════════════════════════════
+const NAV_CONTROLLER = (() => {
+
+  // ── Tuning knobs ─────────────────────────────────────────────
+  const MIN_ALT_METERS   = 250;          // hard floor — never go below this
+  const ZOOM_FACTOR      = 0.18;         // fraction of altitude per scroll tick
+  const ZOOM_DURATION_MS = 260;          // smooth tween length in ms
+  const PITCH_MIN        = -Math.PI / 2; // straight down   (most steep)
+  const PITCH_MAX        = -0.01;        // almost horizon  (most shallow)
+
+  let _zoomTween = null;                 // handle for cancelling in-flight tween
+
+  // ── 1. ScreenSpaceCameraController settings ──────────────────
+  function _applySscc() {
+    const ctrl = scene.screenSpaceCameraController;
+
+    // FIX 2: Prevent camera from clipping through terrain / 3D tiles
+    ctrl.enableCollisionDetection = true;
+
+    // FIX 4: Remove Cesium's built-in scroll zoom entirely.
+    //        We replace it with our own centre-targeting wheel listener.
+    ctrl.zoomEventTypes = [];
+
+    // Keep tilt (middle-drag / Ctrl+left-drag / pinch) working normally
+    ctrl.tiltEventTypes = [
+      Cesium.CameraEventType.MIDDLE_DRAG,
+      Cesium.CameraEventType.PINCH,
+      {
+        eventType: Cesium.CameraEventType.LEFT_DRAG,
+        modifier:  Cesium.KeyboardEventModifier.CTRL,
+      },
+    ];
+  }
+
+  // ── 2. Pitch guard — runs every frame via preRender ──────────
+  //    FIX 3: Clamps pitch so the camera can never flip upside-down
+  //           or look up through the globe from below.
+  function _installPitchGuard() {
+    scene.preRender.addEventListener(() => {
+      const pitch = viewer.camera.pitch;
+
+      if (pitch > PITCH_MAX) {
+        viewer.camera.setView({
+          orientation: {
+            heading: viewer.camera.heading,
+            pitch:   PITCH_MAX,
+            roll:    viewer.camera.roll,
+          },
+        });
+      }
+
+      if (pitch < PITCH_MIN) {
+        viewer.camera.setView({
+          orientation: {
+            heading: viewer.camera.heading,
+            pitch:   PITCH_MIN,
+            roll:    viewer.camera.roll,
+          },
+        });
+      }
+
+      // Hard altitude floor — catches gaps in the 3D tile mesh
+      // that Cesium's collision detection can miss
+      try {
+        const alt = viewer.camera.positionCartographic.height;
+        if (alt < MIN_ALT_METERS) {
+          const carto  = viewer.camera.positionCartographic.clone();
+          carto.height = MIN_ALT_METERS;
+          viewer.camera.position =
+            Cesium.Ellipsoid.WGS84.cartographicToCartesian(carto);
+        }
+      } catch(e) {}
+    });
+  }
+
+  // ── 3. Smooth centre-zoom ─────────────────────────────────────
+  //    FIX 1 + 4: Every wheel event:
+  //      a) Resolves the zoom target from the CANVAS CENTRE, not the mouse
+  //      b) Tweens altitude over ZOOM_DURATION_MS using easeOutCubic
+  //      c) Cancels any in-flight tween when a new scroll arrives
+  function _installCentreZoom() {
+    const canvas = scene.canvas;
+
+    function easeOutCubic(t) {
+      return 1 - Math.pow(1 - t, 3);
+    }
+
+    canvas.addEventListener('wheel', evt => {
+      evt.preventDefault();
+
+      const currentAlt = viewer.camera.positionCartographic.height;
+      const zoomOut    = evt.deltaY > 0;                         // true = zoom out
+      const targetAlt  = currentAlt * (1 + (zoomOut ? 1 : -1) * ZOOM_FACTOR);
+      const clampedAlt = Math.max(MIN_ALT_METERS, targetAlt);
+
+      // Always resolve ground point from SCREEN CENTRE — never the cursor
+      const cx = canvas.clientWidth  / 2;
+      const cy = canvas.clientHeight / 2;
+      const centre2D = new Cesium.Cartesian2(cx, cy);
+
+      // Works whether globe is enabled (Esri fallback) or disabled (Google tiles)
+      const groundPt = scene.globe
+        ? viewer.camera.pickEllipsoid(centre2D, scene.globe.ellipsoid)
+        : scene.pickPosition(centre2D);
+
+      // Cancel any running tween so rapid scrolling stays responsive
+      if (_zoomTween) { _zoomTween.cancelled = true; _zoomTween = null; }
+
+      const tween = { cancelled: false };
+      _zoomTween   = tween;
+
+      const startAlt  = currentAlt;
+      const startTime = performance.now();
+
+      function step(now) {
+        if (tween.cancelled) return;
+
+        const elapsed = now - startTime;
+        const t       = Math.min(elapsed / ZOOM_DURATION_MS, 1.0);
+        const eased   = easeOutCubic(t);
+        const interpAlt = startAlt + (clampedAlt - startAlt) * eased;
+
+        // Move camera: maintain heading/pitch, just change altitude
+        try {
+          const carto  = viewer.camera.positionCartographic.clone();
+          carto.height = Math.max(MIN_ALT_METERS, interpAlt);
+          viewer.camera.position =
+            Cesium.Ellipsoid.WGS84.cartographicToCartesian(carto);
+        } catch(e) {}
+
+        if (t < 1.0) {
+          requestAnimationFrame(step);
+        } else {
+          _zoomTween = null;
+        }
+      }
+
+      if (groundPt) {
+        // Normal path: ground resolved, tween toward centre
+        requestAnimationFrame(step);
+      } else {
+        // Fallback: looking at sky — use Cesium's native zoomIn/Out
+        if (zoomOut) {
+          viewer.camera.zoomOut(currentAlt * ZOOM_FACTOR);
+        } else {
+          viewer.camera.zoomIn(currentAlt * ZOOM_FACTOR);
+        }
+      }
+
+    }, { passive: false }); // passive:false is required to call preventDefault
+  }
+
+  // ── Public init ───────────────────────────────────────────────
+  function init() {
+    _applySscc();
+    _installPitchGuard();
+    _installCentreZoom();
+    LOG.add('[NAV] Camera controller online', 'sig');
+    LOG.add('[NAV] Collision ON · pitch clamped · centre-zoom active', 'sys');
+  }
+
+  return { init };
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// 11. BOOT SEQUENCE
+// ══════════════════════════════════════════════════════════════
+(async () => {
+  // Render layer toggles in sidebar
+  LAYER_REGISTRY.renderToggles();
+
+  // Mount all entity collections to the viewer
+  LAYER_REGISTRY._mount();
+
+  // Start UI subsystems
+  UI.startClock();
+  UI.startCoords();
+  UI.startClickHandler();
+
+  // ── NAV CONTROLLER — runs immediately after viewer exists ──
+  NAV_CONTROLLER.init();
+
+  // Start intel log
+  LOG.boot();
+  setTimeout(() => LOG.startAmbient(), 5000);
+
+  // Install shader (non-blocking)
+  SHADER.install();
+
+  // Load the map (async — tiles stream in after boot)
+  await LOAD_MAP();
+
+  // Fly camera to [78.9, 20.5] — South Asia, 5 000 km
+  CAM.flyToRegion();
+
+  // Start the 60-second refresh loop
+  startRefreshLoop(20_000);  // 20s — fast refresh for live coverage
+
+  // Aviation/Maritime status owned by their modules
+  UI.setStatus('satellite',   'IDLE', 'idle');
+  UI.setStatus('fires',       'IDLE', 'idle');
+  UI.setStatus('weather',     'IDLE', 'idle');
+
+  LOG.add('[SYS] Foundation boot complete — modules active', 'sig');
+})();
+
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  AVIATION_MODULE  —  v2 UPGRADED                            ║
+// ║  Civil   : ADSB.lol global feed  +  OpenSky fallback        ║
+// ║  Military: ADSB.lol /v2/mil dedicated military endpoint      ║
+// ║  Features: Separate MIL layer, rich icons, trail lines       ║
+// ╚══════════════════════════════════════════════════════════════╝
+const AVIATION_MODULE = (() => {
+
+  // ── API endpoints ────────────────────────────────────────────
+  const URL_CIVIL = 'https://api.adsb.lol/v2/lat/0/lon/0/dist/99999';
+  const URL_MIL   = 'https://api.adsb.lol/v2/mil';  // dedicated military feed
+
+  // ── Expanded military classification ─────────────────────────
+  const MIL_PREFIXES = [
+    // US Military
+    'RCH','CNV','REACH','KNIFE','EVAC','JAKE','USAF','NAVY','ARMY','VENUS',
+    'IRON','DUKE','HAWK','EAGLE','VIPER','CHAOS','SPAR','SAM','GTMO','HOMER',
+    'MOOSE','COLT','FATAL','GRIM','REAPER','GHOST','BISON','BOXER','COBRA',
+    'DEMON','DRAGON','FALCON','FURY','GRIZZLY','HUSKY','JOLLY','KING',
+    'LANCE','LION','LYNX','MAGIC','MYSTIC','NINJA','NOBLE','OLIVE','OSCAR',
+    'PANTHER','PINTO','RACER','RAVEN','ROBIN','ROCKY','ROGER','ROMAN',
+    'RULER','SABRE','SCOUT','SHADE','SHARK','SHELL','SHIELD','SHOT',
+    'SILVER','SKULL','SLAM','SNAKE','SPARTAN','STING','STORM','SURGE',
+    'TALON','TIGER','TITAN','TORCH','TUSK','VALOR','VIKING','VOODOO',
+    'VULCAN','WEDGE','WITCH','WOLF','ZOMBIE',
+    // Allied/NATO
+    'NATO','RFR','RFF','RFA','MMF','MRF','TOPCAT','TRIDENT',
+    'SWIFT','TARTAN','TARR','ROOK','DERBY','FORD','ASCOT','COMET',
+    // South/SE Asia
+    'PAF','BAF','IAF','SLAF','MAF','RNZAF','RAAF','RAF ',
+    'VVAF','RTAF','ROKAF','JASDF','PLAAF','PLANAF',
+    // Other state
+    'ASY','EXEC','VIP','HEAD','STATE',
+  ];
+
+  const MIL_HEX = [
+    'ae','af',                    // US mil (ae=USAF, af=USN/USMC)
+    'a9f',                        // US Coast Guard
+    'c0','c1','c2',               // Canada state
+    '43c','43d','43e','43f',      // Russia mil
+    '800','801',                  // India state/mil
+    '76','77',                    // Pakistan/Bangladesh
+    'f00','f01','f02',            // South Korea
+    '8960','8961','8962',         // Saudi Arabia
+    '710','711','712','713',      // China PLAAF
+    '460','461','462','463','464',// UK RAF/RN
+    '3a0','3a1','3a2','3a3','3a4',// France Armée de l'air
+    '3000','3001',                // Germany Luftwaffe
+    'b00','b01','b02','b03',      // Australia RAAF
+  ];
+
+  function _classify(f) {
+    // If it came from the /v2/mil endpoint → always military
+    if (f._fromMil) return 'MILITARY';
+    const cs  = (f.callsign || '').trim().toUpperCase();
+    const hex = (f.icao24   || '').toLowerCase();
+    if (!cs || /^[0-9A-F]{4,8}$/.test(cs)) return 'MILITARY';
+    if (MIL_PREFIXES.some(p => cs.startsWith(p.trim()))) return 'MILITARY';
+    if (MIL_HEX.some(p => hex.startsWith(p)))            return 'MILITARY';
+    return 'COMMERCIAL';
+  }
+
+  // ── Improved aircraft icon — proper plane silhouette ─────────
+  function _makeIcon(type, heading) {
+    const SZ  = 40;
+    const c   = document.createElement('canvas');
+    c.width   = c.height = SZ;
+    const ctx = c.getContext('2d');
+    const col = type === 'MILITARY' ? '#ff9900' : '#00ff9d';
+    const glow = type === 'MILITARY' ? '#ff6600' : '#00cc77';
+
+    ctx.save();
+    ctx.translate(SZ/2, SZ/2);
+    ctx.rotate(((heading || 0) - 0) * Math.PI / 180);
+
+    ctx.shadowColor = glow;
+    ctx.shadowBlur  = type === 'MILITARY' ? 16 : 10;
+    ctx.fillStyle   = col;
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = 0.8;
+
+    if (type === 'MILITARY') {
+      // Fighter silhouette — delta-wing shape
+      ctx.beginPath();
+      ctx.moveTo(0, -13);          // nose
+      ctx.lineTo(10,  6);          // right wingtip
+      ctx.lineTo(4,   4);          // right wing-body
+      ctx.lineTo(3,  10);          // right tail
+      ctx.lineTo(0,   8);          // tail centre
+      ctx.lineTo(-3, 10);          // left tail
+      ctx.lineTo(-4,  4);          // left wing-body
+      ctx.lineTo(-10, 6);          // left wingtip
+      ctx.closePath();
+      ctx.fill();
+      // Cockpit dot
+      ctx.fillStyle = '#ffffff88';
+      ctx.beginPath();
+      ctx.arc(0, -6, 1.8, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      // Commercial airliner silhouette
+      ctx.beginPath();
+      ctx.moveTo(0, -14);          // nose
+      ctx.lineTo(2,  -6);          // fuselage-right
+      ctx.lineTo(11,  1);          // right wingTip
+      ctx.lineTo(4,   4);          // right wing root
+      ctx.lineTo(3,   8);          // right stabiliser tip
+      ctx.lineTo(1,   7);          // right stab root
+      ctx.lineTo(0,  10);          // tail
+      ctx.lineTo(-1,  7);
+      ctx.lineTo(-3,  8);
+      ctx.lineTo(-4,  4);
+      ctx.lineTo(-11, 1);
+      ctx.lineTo(-2, -6);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+    return c;
+  }
+
+  const _iconCache = {};
+  function _getIcon(type, heading) {
+    const bucket = Math.round((heading || 0) / 5) * 5; // 5° buckets → smoother rotation
+    const key    = `${type}_${bucket}`;
+    if (!_iconCache[key]) _iconCache[key] = _makeIcon(type, bucket);
+    return _iconCache[key];
+  }
+
+  // ── Dead-reckoning — 1s smooth movement ──────────────────────
+  const _drState = new Map();
+  let   _drTimer = null;
+
+  function _drUpdate() {
+    const now = Date.now();
+    _drState.forEach((st, icao24) => {
+      if (!st.velocity || st.velocity < 10) return;
+      const entity = LAYER_REGISTRY.AVIATION.entities.entities.getById(icao24);
+      if (!entity) return;
+      const dt     = (now - st.lastTick) / 1000;
+      st.lastTick  = now;
+      const spdMs  = st.velocity / 3.6;
+      const distM  = spdMs * dt;
+      const R      = 6371000;
+      const hdgRad = (st.heading * Math.PI) / 180;
+      const latRad = st.lat * Math.PI / 180;
+      st.lat += (distM / R) * (180 / Math.PI) * Math.cos(hdgRad);
+      st.lon += (distM / R) * (180 / Math.PI) / Math.cos(latRad) * Math.sin(hdgRad);
+      st.lat  = Math.max(-85, Math.min(85, st.lat));
+      st.lon  = ((st.lon + 540) % 360) - 180;
+      if (!isFinite(st.lat) || !isFinite(st.lon)) return;
+      try {
+        const altM = Math.max((st.alt || 1000) * 0.3048, 500); // ft → m
+        entity.position = Cesium.Cartesian3.fromDegrees(st.lon, st.lat, altM);
+        // Keep _oeData in sync so click tracker sees latest pos
+        if (entity._oeData) {
+          entity._oeData.lat = st.lat;
+          entity._oeData.lon = st.lon;
+        }
+      } catch(e) {}
+    });
+  }
+  function _startDR() {
+    if (_drTimer) clearInterval(_drTimer);
+    _drTimer = setInterval(_drUpdate, 1000);
+  }
+
+  // ── Fetch civil flights from ADSB.lol ────────────────────────
+  async function _fetchCivil() {
+    const res = await fetch(URL_CIVIL, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`ADSB.lol civil HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.ac?.length) throw new Error('ADSB.lol civil: empty');
+    return json.ac
+      .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+      .map(a => ({
+        source:   'ADSB.lol',
+        icao24:   (a.hex || '').toLowerCase(),
+        callsign: (a.flight || a.hex || '').trim(),
+        country:  a.r || a.ownOp || '?',
+        lon:      parseFloat(a.lon),
+        lat:      parseFloat(a.lat),
+        altitude: typeof a.alt_baro === 'number' ? a.alt_baro
+                : typeof a.alt_geom === 'number' ? a.alt_geom : 1000,
+        velocity: a.gs        != null ? Math.round(a.gs * 1.852)    : null,
+        heading:  a.track     || a.true_heading || 0,
+        vrate:    a.baro_rate != null ? Math.round(a.baro_rate * 0.00508) : null,
+        squawk:   a.squawk || null,
+        acType:   a.t   || null,
+        reg:      a.r   || null,
+        onGround: a.alt_baro === 'ground' || !!Number(a.ground),
+        _fromMil: false,
+      }));
+  }
+
+  // ── Fetch military flights from dedicated mil endpoint ────────
+  async function _fetchMilitary() {
+    const res = await fetch(URL_MIL, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`ADSB.lol mil HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.ac?.length) throw new Error('ADSB.lol mil: empty');
+    return json.ac
+      .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+      .map(a => ({
+        source:   'ADSB.lol/MIL',
+        icao24:   (a.hex || '').toLowerCase(),
+        callsign: (a.flight || a.hex || '').trim(),
+        country:  a.r || a.ownOp || '?',
+        lon:      parseFloat(a.lon),
+        lat:      parseFloat(a.lat),
+        altitude: typeof a.alt_baro === 'number' ? a.alt_baro
+                : typeof a.alt_geom === 'number' ? a.alt_geom : 1000,
+        velocity: a.gs        != null ? Math.round(a.gs * 1.852)    : null,
+        heading:  a.track     || a.true_heading || 0,
+        vrate:    a.baro_rate != null ? Math.round(a.baro_rate * 0.00508) : null,
+        squawk:   a.squawk || null,
+        acType:   a.t   || null,
+        reg:      a.r   || null,
+        onGround: false,
+        _fromMil: true, // guaranteed military
+      }));
+  }
+
+  // ── OpenSky fallback ──────────────────────────────────────────
+  async function _fetchOpenSky() {
+    const res = await fetch('https://opensky-network.org/api/states/all',
+                            { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error(`OpenSky HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.states?.length) throw new Error('OpenSky: empty');
+    return json.states
+      .filter(s => s[5] != null && s[6] != null && !s[8])
+      .map(s => ({
+        source:   'OpenSky',
+        icao24:   s[0] || '',
+        callsign: (s[1] || '').trim(),
+        country:  s[2] || '?',
+        lon:      s[5], lat: s[6],
+        altitude: s[7] || s[13] || 1000,
+        velocity: s[9]  != null ? Math.round(s[9] * 3.6) : null,
+        heading:  s[10] || 0,
+        vrate:    s[11] != null ? Math.round(s[11])       : null,
+        squawk:   s[14] || null,
+        onGround: false,
+        _fromMil: false,
+      }));
+  }
+
+  // ── Merge by ICAO24 — mil + ADSB.lol wins over OpenSky ───────
+  function _merge(lists) {
+    const map = new Map();
+    // Priority: OpenSky < ADSB.lol civil < ADSB.lol mil
+    for (const list of lists) {
+      list.forEach(f => {
+        const key = f.icao24.toLowerCase() || Math.random().toString();
+        if (!map.has(key) || f._fromMil || f.source === 'ADSB.lol')
+          map.set(key, f);
+      });
+    }
+    return Array.from(map.values());
+  }
+
+  // ── Render ────────────────────────────────────────────────────
+  function _render(flights) {
+    const layer = LAYER_REGISTRY.AVIATION;
+    layer.entities.entities.removeAll();
+
+    let milCount = 0;
+    const feedItems = [];
+
+    flights.forEach(f => {
+      const cls = _classify(f);
+      f.classification = cls;
+
+      if (cls === 'MILITARY') {
+        milCount++;
+        LOG.add(
+          `[SIGINT] MIL TRANSPONDER — ${(f.callsign || f.icao24).toUpperCase()} · ${f.country} · ${f.acType || '?'}`,
+          'warn'
+        );
+      }
+
+      // Altitude: ADSB.lol reports in feet, OpenSky in metres
+      const altFt  = f.source === 'OpenSky'
+        ? (f.altitude || 500) * 3.28084   // m→ft for consistent FL display
+        : (f.altitude || 500);
+      const altM   = Math.max(f.source === 'OpenSky'
+        ? (f.altitude || 500)
+        : (f.altitude || 500) * 0.3048, 300);
+      const flStr  = `FL${Math.round(altFt / 100).toString().padStart(3,'0')}`;
+
+      const col  = cls === 'MILITARY' ? '#ff9900' : '#00ff9d';
+      const icon = _getIcon(cls, f.heading);
+
+      if (!isFinite(f.lat) || !isFinite(f.lon)) return;
+
+      const entity = layer.entities.entities.add({
+        id:       f.icao24 || undefined,
+        position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, altM),
+
+        billboard: {
+          image:          icon,
+          width:          cls === 'MILITARY' ? 32 : 28,
+          height:         cls === 'MILITARY' ? 32 : 28,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          scaleByDistance:      new Cesium.NearFarScalar(80_000, 1.4, 8_000_000, 0.25),
+          translucencyByDistance: new Cesium.NearFarScalar(100_000, 1.0, 12_000_000, 0.4),
+          disableDepthTestDistance: 500,
+        },
+
+        // Vertical stem to surface
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArrayHeights([f.lon,f.lat,0, f.lon,f.lat,altM]),
+          width: 1,
+          material: new Cesium.PolylineDashMaterialProperty({
+            color: Cesium.Color.fromCssColorString(col).withAlpha(0.15),
+            dashLength: 12,
+          }),
+          clampToGround: false,
+        },
+
+        label: {
+          text:             f.callsign || f.icao24.toUpperCase(),
+          font:             '11px Share Tech Mono, monospace',
+          fillColor:        Cesium.Color.fromCssColorString(col),
+          outlineColor:     Cesium.Color.BLACK,
+          outlineWidth:     2,
+          style:            Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset:      new Cesium.Cartesian2(0, -22),
+          scaleByDistance:  new Cesium.NearFarScalar(80_000, 1.0, 2_500_000, 0.0),
+          disableDepthTestDistance: 500,
+          showBackground:   true,
+          backgroundColor:  Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
+          backgroundPadding:new Cesium.Cartesian2(4, 2),
+        },
+      });
+
+      entity._oeData = { ...f, type:'flight', altM, flStr };
+
+      _drState.set((f.icao24||'').toLowerCase() || f.callsign, {
+        lat: f.lat, lon: f.lon,
+        alt: f.altitude || 1000,
+        heading:  f.heading  || 0,
+        velocity: f.velocity || 0,
+        lastTick: Date.now(),
+      });
+
+      feedItems.push({
+        type:     'flight',
+        name:     f.callsign || f.icao24.toUpperCase(),
+        sub:      `${f.country} · ${flStr} · ${f.velocity != null ? f.velocity+'km/h' : '?'}`,
+        color:    col,
+        tag:      cls === 'MILITARY' ? 'tag-mil' : 'tag-air',
+        tagLabel: cls === 'MILITARY' ? 'MIL' : 'CIV',
+        lat: f.lat, lon: f.lon,
+        feedAlt: Math.max(altM * 1.5, 150_000),
+      });
+    });
+
+    // Prune stale DR entries
+    const activeHex = new Set(flights.map(f => (f.icao24||'').toLowerCase()));
+    for (const key of _drState.keys()) { if (!activeHex.has(key)) _drState.delete(key); }
+    _startDR();
+
+    layer.count = flights.length;
+    LAYER_REGISTRY._sync('AVIATION');
+    UI.renderFeed(feedItems);
+    LOG.add(`[AVIATION] ${flights.length} contacts · ${milCount} military`, 'sig');
+    UI.setStatus('aviation', `LIVE · ${flights.length}`, 'ok');
+    document.getElementById('sb-flights').innerHTML = `FLIGHTS <span>${flights.length}</span>`;
+  }
+
+  // ── Demo fallback ─────────────────────────────────────────────
+  function _demo() {
+    LOG.add('[AVIATION] APIs unavailable — loading global demo contacts', 'warn');
+    document.getElementById('sb-demo').style.display = 'block';
+    const DEMO = [
+      { icao24:'a12345',callsign:'UAL901', country:'USA',       lon:-87.50,lat:41.00, altitude:36000,velocity:920,heading:90, vrate:0, squawk:'2341',source:'Demo',acType:'B77W',_fromMil:false },
+      { icao24:'a23456',callsign:'AAL100', country:'USA',       lon:-118.2,lat:34.05, altitude:31000,velocity:880,heading:270,vrate:-5,squawk:'1200',source:'Demo',acType:'B788',_fromMil:false },
+      { icao24:'3c6444',callsign:'DLH400', country:'Germany',   lon:10.00, lat:50.00, altitude:37000,velocity:910,heading:270,vrate:0, squawk:'1000',source:'Demo',acType:'A346',_fromMil:false },
+      { icao24:'400f86',callsign:'BAW176', country:'UK',        lon:-0.50, lat:51.50, altitude:35000,velocity:900,heading:80, vrate:5, squawk:'4521',source:'Demo',acType:'B789',_fromMil:false },
+      { icao24:'896060',callsign:'UAE203', country:'UAE',       lon:55.36, lat:25.25, altitude:39000,velocity:930,heading:90, vrate:0, squawk:'2001',source:'Demo',acType:'A388',_fromMil:false },
+      { icao24:'780b9b',callsign:'CCA881', country:'China',     lon:116.4, lat:39.90, altitude:39000,velocity:930,heading:90, vrate:0, squawk:'5001',source:'Demo',acType:'B77W',_fromMil:false },
+      { icao24:'71be60',callsign:'SIA21',  country:'Singapore', lon:104.0, lat:1.35,  altitude:35000,velocity:895,heading:45, vrate:0, squawk:'3412',source:'Demo',acType:'A359',_fromMil:false },
+      { icao24:'7c6b35',callsign:'QFA100', country:'Australia', lon:151.2, lat:-33.9, altitude:37000,velocity:910,heading:315,vrate:0, squawk:'6100',source:'Demo',acType:'A388',_fromMil:false },
+      { icao24:'ae0408',callsign:'RCH872', country:'USA',       lon:-77.00,lat:38.00, altitude:35000,velocity:855,heading:100,vrate:0, squawk:'7700',source:'Demo',acType:'C17', _fromMil:true  },
+      { icao24:'ae1234',callsign:'REACH01',country:'USA',       lon:57.50, lat:21.30, altitude:40000,velocity:870,heading:270,vrate:0, squawk:'7001',source:'Demo',acType:'KC135',_fromMil:true },
+      { icao24:'800e22',callsign:'IAF221', country:'India',     lon:77.10, lat:28.60, altitude:28000,velocity:830,heading:270,vrate:0, squawk:'7001',source:'Demo',acType:'C130',_fromMil:true  },
+      { icao24:'e49151',callsign:'GLO1234',country:'Brazil',    lon:-46.6, lat:-23.6, altitude:36000,velocity:870,heading:180,vrate:0, squawk:'5200',source:'Demo',acType:'B737',_fromMil:false },
+    ];
+    _render(DEMO);
+  }
+
+  // ── Detail renderer ───────────────────────────────────────────
+  DETAIL_RENDERERS['flight'] = (d) => {
+    const cls   = d.classification || 'COMMERCIAL';
+    const col   = cls === 'MILITARY' ? 'var(--orange)' : 'var(--g)';
+    const badge = cls === 'MILITARY'
+      ? `<span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,153,0,0.4);background:rgba(255,153,0,0.08)">⚠ MILITARY</span>`
+      : `<span class="detail-badge" style="color:var(--cyan);border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.08)">✈ COMMERCIAL</span>`;
+
+    const fl   = d.flStr || '—';
+    const spd  = d.velocity != null ? `${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)` : '—';
+    const hdg  = d.heading  != null ? `${Math.round(d.heading)}°` : '—';
+    const vr   = d.vrate    != null
+      ? `<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">
+           ${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>` : '—';
+    const sq   = d.squawk
+      ? `<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>` : '—';
+
+    return `
+      <div class="detail-name" style="color:${col}">${d.callsign || (d.icao24||'').toUpperCase() || 'UNKNOWN'}</div>
+      ${badge}
+      <div class="detail-grid" style="margin-top:6px">
+        <div><div class="dg-cell-label">ICAO24 / HEX</div><div class="dg-cell-value">${(d.icao24||'—').toUpperCase()}</div></div>
+        <div><div class="dg-cell-label">Country / Reg</div><div class="dg-cell-value">${d.country||'—'} ${d.reg?'· '+d.reg:''}</div></div>
+        <div><div class="dg-cell-label">Flight Level</div><div class="dg-cell-value" style="color:${col};font-size:0.8rem;font-weight:bold">${fl}</div></div>
+        <div><div class="dg-cell-label">Aircraft</div><div class="dg-cell-value">${d.acType||'—'}</div></div>
+        <div><div class="dg-cell-label">Speed</div><div class="dg-cell-value">${spd}</div></div>
+        <div><div class="dg-cell-label">Heading</div><div class="dg-cell-value">${hdg}</div></div>
+        <div><div class="dg-cell-label">Vert Rate</div><div class="dg-cell-value">${vr}</div></div>
+        <div><div class="dg-cell-label">Squawk</div><div class="dg-cell-value">${sq}</div></div>
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">${d.source||'—'}</div></div>
+      </div>`;
+  };
+
+  // ── Main refresh ──────────────────────────────────────────────
+  LAYER_REGISTRY.AVIATION.refresh = async function () {
+    UI.setStatus('aviation', 'FETCHING', 'warn');
+    LOG.add('[AVIATION] Polling civil + military feeds simultaneously...', 'sys');
+
+    // Fetch civil and military in parallel
+    const [civilResult, milResult, osResult] = await Promise.allSettled([
+      _fetchCivil(),
+      _fetchMilitary(),
+      _fetchOpenSky(),
+    ]);
+
+    const civil = civilResult.status  === 'fulfilled' ? civilResult.value  : [];
+    const mil   = milResult.status    === 'fulfilled' ? milResult.value    : [];
+    const os    = osResult.status     === 'fulfilled' ? osResult.value     : [];
+
+    if (civilResult.status === 'rejected')
+      LOG.add(`[AVIATION] Civil feed failed — ${civilResult.reason?.message}`, 'warn');
+    if (milResult.status === 'rejected')
+      LOG.add(`[AVIATION] Military feed failed — ${milResult.reason?.message}`, 'warn');
+
+    if (!civil.length && !mil.length && !os.length) {
+      _demo(); return;
+    }
+
+    LOG.add(`[AVIATION] Civil:${civil.length} Mil:${mil.length} OpenSky:${os.length}`, 'sig');
+
+    // Merge — mil takes priority, then ADSB.lol civil, then OpenSky
+    const merged = _merge([os, civil, mil]);
+
+    // Sanitise — valid coords, airborne only
+    const valid = merged.filter(f =>
+      isFinite(f.lat) && isFinite(f.lon)
+      && f.lat >= -90  && f.lat  <= 90
+      && f.lon >= -180 && f.lon  <= 180
+      && !f.onGround
+    );
+
+    _render(valid);
+  };
+
+  LOG.add('[AVIATION] v2 module loaded — civil + military feeds active', 'air');
+  UI.setStatus('aviation', 'LOADING', 'warn');
+  setTimeout(() => LAYER_REGISTRY.AVIATION.refresh(), 800);
+
+  return { refresh: () => LAYER_REGISTRY.AVIATION.refresh() };
+
+})(); // END AVIATION_MODULE
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  MARITIME_MODULE  —  v2 UPGRADED                            ║
+// ║  Sources : AISHub regional passes · VTExplorer · AISStream  ║
+// ║  Features: Vessel trails · Naval detection · Rich icons      ║
+// ╚══════════════════════════════════════════════════════════════╝
+const MARITIME_MODULE = (() => {
+
+  const BBOX = { latMin:-90, latMax:90, lonMin:-180, lonMax:180 };
+
+  // ── Vessel classification by AIS ship type code ───────────────
+  // Full ITU/IMO ship type table
+  const CLS_STYLE = {
+    CARGO:     { color:'#00ff9d', label:'CARGO',     tag:'tag-ship' },
+    TANKER:    { color:'#ff3c3c', label:'TANKER',    tag:'tag-warn' },
+    NAVAL:     { color:'#00d4ff', label:'NAVAL',     tag:'tag-mil'  },
+    PASSENGER: { color:'#ffe600', label:'PASSENGER', tag:'tag-air'  },
+    FISHING:   { color:'#b44fff', label:'FISHING',   tag:'tag-ship' },
+    TUG:       { color:'#ff9900', label:'TUG/SUPPLY',tag:'tag-ship' },
+    HIGHSPEED: { color:'#ff9900', label:'HIGH SPEED',tag:'tag-air'  },
+    SAR:       { color:'#ff3c3c', label:'SAR',       tag:'tag-warn' },
+    OTHER:     { color:'#44ffcc', label:'OTHER',     tag:'tag-ship' },
+  };
+
+  function _classify(v) {
+    const t    = parseInt(v.shipType || 0);
+    const mmsi = String(v.mmsi || '');
+    const name = (v.name || '').toUpperCase();
+
+    // MMSI 100–199 = military / coast guard in most nations
+    const mmsiPfx = parseInt(mmsi.substring(0,3));
+    if (mmsiPfx >= 100 && mmsiPfx <= 199) return 'NAVAL';
+    // Name hints
+    if (/\b(HMS|USS|INS|PNS|BNS|USCG|FRIGATE|DESTROYER|CORVETTE|WARSHIP|PATROL|COAST.?GUARD|NAVAL)\b/.test(name))
+      return 'NAVAL';
+
+    if (t >= 35 && t <= 39) return 'NAVAL';         // military / law enforcement
+    if (t >= 20 && t <= 29) return 'HIGHSPEED';      // WIG / high speed craft
+    if (t === 51 || t === 52) return 'SAR';           // SAR / pilot
+    if (t >= 50 && t <= 59) return 'TUG';            // tugs, pilot, tenders
+    if (t >= 60 && t <= 69) return 'PASSENGER';
+    if (t >= 70 && t <= 79) return 'CARGO';
+    if (t >= 80 && t <= 89) return 'TANKER';
+    if (t >= 30 && t <= 34) return 'FISHING';
+    return 'OTHER';
+  }
+
+  // ── Global strategic chokepoints (20 waterways) ───────────────
+  const CHOKEPOINTS = [
+    { name:'MALACCA STRAIT',      latMin:1.0,   latMax:6.5,  lonMin:99.0,  lonMax:104.5 },
+    { name:'STRAIT OF HORMUZ',    latMin:25.5,  latMax:27.5, lonMin:56.0,  lonMax:59.5  },
+    { name:'BAB-EL-MANDEB',       latMin:11.5,  latMax:13.5, lonMin:42.5,  lonMax:44.5  },
+    { name:'LOMBOK STRAIT',       latMin:-9.0,  latMax:-7.5, lonMin:115.0, lonMax:116.5 },
+    { name:'SUNDA STRAIT',        latMin:-6.5,  latMax:-5.5, lonMin:105.5, lonMax:106.5 },
+    { name:'SINGAPORE STRAIT',    latMin:1.1,   latMax:1.5,  lonMin:103.5, lonMax:104.2 },
+    { name:'TAIWAN STRAIT',       latMin:22.0,  latMax:27.0, lonMin:119.0, lonMax:121.5 },
+    { name:'KOREA STRAIT',        latMin:33.5,  latMax:35.5, lonMin:128.5, lonMax:131.0 },
+    { name:'SUEZ CANAL',          latMin:29.0,  latMax:33.0, lonMin:31.5,  lonMax:34.5  },
+    { name:'CAPE OF GOOD HOPE',   latMin:-35.5, latMax:-33.0,lonMin:17.5,  lonMax:20.0  },
+    { name:'CAPE HORN',           latMin:-56.5, latMax:-54.5,lonMin:-68.0, lonMax:-63.0 },
+    { name:'STRAIT OF GIBRALTAR', latMin:35.5,  latMax:36.5, lonMin:-6.0,  lonMax:-5.0  },
+    { name:'ENGLISH CHANNEL',     latMin:50.0,  latMax:52.5, lonMin:-2.0,  lonMax:2.5   },
+    { name:'DANISH STRAITS',      latMin:54.5,  latMax:57.5, lonMin:9.5,   lonMax:13.0  },
+    { name:'TURKISH STRAITS',     latMin:40.5,  latMax:42.0, lonMin:26.5,  lonMax:29.5  },
+    { name:'PANAMA CANAL',        latMin:8.5,   latMax:10.0, lonMin:-80.0, lonMax:-77.5 },
+    { name:'FLORIDA STRAIT',      latMin:23.0,  latMax:25.5, lonMin:-81.0, lonMax:-78.5 },
+    { name:'CHITTAGONG PORT',     latMin:21.5,  latMax:22.5, lonMin:91.5,  lonMax:92.5  },
+    { name:'MUMBAI APPROACH',     latMin:18.5,  latMax:19.5, lonMin:72.5,  lonMax:73.5  },
+    { name:'COLOMBO APPROACH',    latMin:6.5,   latMax:7.5,  lonMin:79.5,  lonMax:80.5  },
+  ];
+
+  function _getChokepoint(lat, lon) {
+    return CHOKEPOINTS.find(z =>
+      lat >= z.latMin && lat <= z.latMax && lon >= z.lonMin && lon <= z.lonMax
+    ) || null;
+  }
+
+  // ── AIS nav status lookup ─────────────────────────────────────
+  const NAV_STATUS = [
+    'Under way (engine)','At anchor','Not under command','Restricted maneuverability',
+    'Constrained by draught','Moored','Aground','Engaged in fishing',
+    'Under way (sailing)','Reserved (HSC)','Reserved (WIG)','Reserved 11',
+    'Reserved 12','Reserved 13','AIS-SART','Undefined',
+  ];
+
+  // ── Ship icon factory — per vessel class ──────────────────────
+  function _makeShipIcon(cls, heading) {
+    const SZ  = 36;
+    const c   = document.createElement('canvas');
+    c.width   = c.height = SZ;
+    const ctx = c.getContext('2d');
+    const col = CLS_STYLE[cls]?.color || '#44ffcc';
+
+    ctx.save();
+    ctx.translate(SZ/2, SZ/2);
+    ctx.rotate((heading || 0) * Math.PI / 180);
+    ctx.shadowColor = col; ctx.shadowBlur = 10;
+    ctx.fillStyle   = col; ctx.strokeStyle = col; ctx.lineWidth = 1;
+
+    if (cls === 'NAVAL') {
+      // Warship — narrow hull, prominent bow
+      ctx.beginPath();
+      ctx.moveTo(0,  -14);
+      ctx.lineTo(5,   -4);
+      ctx.lineTo(5,    8);
+      ctx.lineTo(3,   12);
+      ctx.lineTo(-3,  12);
+      ctx.lineTo(-5,   8);
+      ctx.lineTo(-5,  -4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#ffffff66';
+      ctx.fillRect(-2, -6, 4, 6);  // superstructure
+    } else if (cls === 'TANKER') {
+      // Tanker — wide flat hull
+      ctx.beginPath();
+      ctx.moveTo(0,  -13);
+      ctx.lineTo(7,   -4);
+      ctx.lineTo(7,   10);
+      ctx.lineTo(-7,  10);
+      ctx.lineTo(-7,  -4);
+      ctx.closePath();
+      ctx.fill();
+    } else if (cls === 'PASSENGER') {
+      // Passenger — tall multi-deck
+      ctx.beginPath();
+      ctx.moveTo(0, -14);
+      ctx.lineTo(6,  -2);
+      ctx.lineTo(6,  10);
+      ctx.lineTo(-6, 10);
+      ctx.lineTo(-6, -2);
+      ctx.closePath();
+      ctx.fill();
+      // Deck lines
+      ctx.strokeStyle = '#00000044';
+      ctx.lineWidth = 0.8;
+      for (let y = 0; y <= 8; y += 4) { ctx.beginPath(); ctx.moveTo(-6,y); ctx.lineTo(6,y); ctx.stroke(); }
+    } else {
+      // Cargo / generic — standard ship shape
+      ctx.beginPath();
+      ctx.moveTo(0,  -13);
+      ctx.lineTo(6,   -2);
+      ctx.lineTo(6,   10);
+      ctx.lineTo(3,   12);
+      ctx.lineTo(-3,  12);
+      ctx.lineTo(-6,  10);
+      ctx.lineTo(-6,  -2);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+    return c;
+  }
+
+  const _iconCache = {};
+  function _getIcon(cls, heading) {
+    const bucket = Math.round((heading || 0) / 10) * 10;
+    const key    = `${cls}_${bucket}`;
+    if (!_iconCache[key]) _iconCache[key] = _makeShipIcon(cls, bucket);
+    return _iconCache[key];
+  }
+
+  // ── AIS normaliser ────────────────────────────────────────────
+  function _norm(v, src) {
+    const lat = parseFloat(v.lat ?? v.LAT ?? v.latitude  ?? 0);
+    const lon = parseFloat(v.lon ?? v.LON ?? v.longitude ?? 0);
+    if (!isFinite(lat) || !isFinite(lon))     return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return {
+      source:      src,
+      mmsi:        String(v.mmsi ?? v.MMSI ?? ''),
+      name:        (v.name ?? v.NAME ?? v.shipname ?? v.SHIPNAME ?? 'UNKNOWN').toString().trim(),
+      callsign:    (v.callsign ?? v.CALLSIGN ?? '').toString().trim(),
+      lat, lon,
+      sog:         parseFloat(v.sog ?? v.SOG ?? v.speed ?? 0) || 0,
+      cog:         parseFloat(v.cog ?? v.COG ?? v.course ?? 0) || 0,
+      heading:     parseFloat(v.heading ?? v.HDG ?? v.truehead ?? v.cog ?? 0) || 0,
+      shipType:    parseInt(v.shiptype ?? v.SHIPTYPE ?? v.type ?? v.ship_type ?? 0) || 0,
+      status:      parseInt(v.status ?? v.STATUS ?? v.nav_status ?? 15) || 15,
+      destination: (v.destination ?? v.DESTINATION ?? v.dest ?? '').toString().trim(),
+      draught:     parseFloat(v.draught ?? v.DRAUGHT ?? 0) || null,
+      length:      parseFloat(v.length  ?? v.LENGTH  ?? 0) || null,
+    };
+  }
+
+  // ── Multi-region AIS fetch (parallel bbox passes) ─────────────
+  async function _fetchRegional(urlFn, regions, label) {
+    const results = [];
+    await Promise.allSettled(regions.map(async q => {
+      try {
+        const res = await fetch(urlFn(q), { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) return;
+        const json = await res.json();
+        const rows = Array.isArray(json) ? json : json.vessels ?? json.data ?? json.ais ?? [];
+        rows.forEach(v => { const n = _norm(v, label); if (n) results.push(n); });
+      } catch(e) {}
+    }));
+    return results;
+  }
+
+  async function _fetchAISHub() {
+    const REGIONS = [
+      '?latmin=-15&latmax=35&lonmin=50&lonmax=130',
+      '?latmin=30&latmax=72&lonmin:-15&lonmax=50',
+      '?latmin=10&latmax=50&lonmin=-100&lonmax:-20',
+      '?latmin=-40&latmax=15&lonmin=-70&lonmax:20',
+      '?latmin:-15&latmax=50&lonmin=100&lonmax=180',
+      '?latmin:-60&latmax=-15&lonmin=-80&lonmax=180',
+    ];
+    return _fetchRegional(
+      q => `https://api.adsb.lol/v2/aishub${q}`,
+      REGIONS, 'AISHub'
+    );
+  }
+
+  async function _fetchVTExplorer() {
+    const PASSES = [
+      '?lat1=0&lat2=72&lon1=-100&lon2=30',
+      '?lat1=-60&lat2=0&lon1=-80&lon2=20',
+      '?lat1=0&lat2=72&lon1=30&lon2=180',
+      '?lat1=-60&lat2=0&lon1=20&lon2=180',
+    ];
+    const results = [];
+    await Promise.allSettled(PASSES.map(async q => {
+      try {
+        const res = await fetch(
+          `https://www.vtexplorer.com/ws/assets/ais/get-vessels.php${q}&cg=1`,
+          { signal: AbortSignal.timeout(10000) }
+        );
+        if (!res.ok) return;
+        const json = await res.json();
+        const rows = json.data ?? json;
+        if (!Array.isArray(rows)) return;
+        rows.forEach(v => {
+          if (v[1] == null || v[2] == null) return;
+          const n = _norm({
+            mmsi:v[0],lat:v[1],lon:v[2],sog:v[3],cog:v[4],heading:v[5]??v[4],
+            shiptype:v[6],status:v[7],name:v[9],callsign:v[10],destination:v[11],
+          }, 'VTExplorer');
+          if (n) results.push(n);
+        });
+      } catch(e) {}
+    }));
+    return results;
+  }
+
+  // ── Dead-reckoning for ships (5s interval, knots→m/s) ────────
+  const _drState = new Map();
+  let   _drTimer = null;
+
+  function _drUpdate() {
+    const now = Date.now();
+    _drState.forEach((st, mmsi) => {
+      if (!st.sog || st.sog < 0.3) return;
+      const entity = LAYER_REGISTRY.MARITIME.entities.entities.getById(mmsi);
+      if (!entity) return;
+      const dt     = (now - st.lastTick) / 1000;
+      st.lastTick  = now;
+      const spdMs  = st.sog * 0.514444;  // knots → m/s
+      const distM  = spdMs * dt;
+      const R      = 6371000;
+      const hdgRad = (st.cog * Math.PI) / 180;
+      const latRad = st.lat * Math.PI / 180;
+      st.lat += (distM / R) * (180/Math.PI) * Math.cos(hdgRad);
+      st.lon += (distM / R) * (180/Math.PI) / Math.cos(latRad) * Math.sin(hdgRad);
+      st.lat  = Math.max(-89, Math.min(89, st.lat));
+      st.lon  = ((st.lon + 540) % 360) - 180;
+      if (!isFinite(st.lat) || !isFinite(st.lon)) return;
+      try {
+        entity.position = Cesium.Cartesian3.fromDegrees(st.lon, st.lat, 1);
+        if (entity._oeData) { entity._oeData.lat = st.lat; entity._oeData.lon = st.lon; }
+      } catch(e) {}
+    });
+  }
+  function _startDR() {
+    if (_drTimer) clearInterval(_drTimer);
+    _drTimer = setInterval(_drUpdate, 5000);
+  }
+
+  // ── Render ────────────────────────────────────────────────────
+  function _render(vessels) {
+    const layer = LAYER_REGISTRY.MARITIME;
+    layer.entities.entities.removeAll();
+
+    let navalCount = 0;
+    let densityAlerts = 0;
+    const feedItems = [];
+    const alerted   = new Set();
+
+    vessels.forEach(v => {
+      const cls   = _classify(v);
+      const style = CLS_STYLE[cls] || CLS_STYLE.OTHER;
+      const col   = style.color;
+      const icon  = _getIcon(cls, v.heading || v.cog || 0);
+
+      if (cls === 'NAVAL') {
+        navalCount++;
+        LOG.add(`[SIGINT] NAVAL VESSEL — ${v.name} MMSI:${v.mmsi}`, 'warn');
+      }
+
+      const zone = _getChokepoint(v.lat, v.lon);
+      if (zone && !alerted.has(zone.name)) {
+        alerted.add(zone.name);
+        densityAlerts++;
+        LOG.add(`[SHIP] DENSITY — ${zone.name} · ${v.name || v.mmsi}`, 'warn');
+      }
+
+      if (!isFinite(v.lat) || !isFinite(v.lon)) return;
+
+      const entity = layer.entities.entities.add({
+        id:       v.mmsi || undefined,
+        position: Cesium.Cartesian3.fromDegrees(v.lon, v.lat, 1),
+
+        billboard: {
+          image:  icon,
+          width:  cls === 'NAVAL' ? 30 : 26,
+          height: cls === 'NAVAL' ? 30 : 26,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          scaleByDistance:       new Cesium.NearFarScalar(50_000, 1.5, 6_000_000, 0.2),
+          translucencyByDistance: new Cesium.NearFarScalar(80_000, 1.0, 8_000_000, 0.3),
+          disableDepthTestDistance: 500,
+        },
+
+        label: {
+          text:         v.name || v.mmsi,
+          font:         '10px Share Tech Mono, monospace',
+          fillColor:    Cesium.Color.fromCssColorString(col),
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+          style:        Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset:  new Cesium.Cartesian2(0, -20),
+          scaleByDistance: new Cesium.NearFarScalar(50_000, 1.0, 1_500_000, 0.0),
+          disableDepthTestDistance: 500,
+          showBackground:    true,
+          backgroundColor:   Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
+          backgroundPadding: new Cesium.Cartesian2(3, 2),
+        },
+      });
+
+      entity._oeData = { ...v, type:'ship', classification: cls };
+      _drState.set(v.mmsi, { lat:v.lat, lon:v.lon, sog:v.sog||0, cog:v.cog||v.heading||0, lastTick:Date.now() });
+
+      feedItems.push({
+        type:'ship', name:v.name||v.mmsi,
+        sub:`${v.destination||'?'} · ${v.sog!=null?v.sog.toFixed(1)+'kn':'?'} · ${style.label}`,
+        color:col, tag:style.tag, tagLabel:style.label,
+        lat:v.lat, lon:v.lon, feedAlt:120_000,
+      });
+    });
+
+    _startDR();
+    layer.count = vessels.length;
+    LAYER_REGISTRY._sync('MARITIME');
+    LOG.add(`[MARITIME] ${vessels.length} vessels · ${navalCount} naval · ${densityAlerts} chokepoint alerts`, 'ship');
+    UI.setStatus('maritime', `LIVE · ${vessels.length}`, 'ok');
+    document.getElementById('sb-ships').innerHTML = `VESSELS <span>${vessels.length}</span>`;
+  }
+
+  // ── Demo ──────────────────────────────────────────────────────
+  function _demo() {
+    LOG.add('[MARITIME] APIs unavailable — loading demo vessels', 'warn');
+    document.getElementById('sb-demo').style.display = 'block';
+    const DEMO = [
+      { mmsi:'370100000',name:'MV CHITTAGONG EXPRESS',callsign:'S2ABC', lat:22.20,lon:91.80, sog:9.5, cog:270,heading:270,shipType:71,status:0,destination:'BGCGP',source:'Demo' },
+      { mmsi:'370200000',name:'MT ARABIAN STAR',      callsign:'A4XYZ', lat:13.50,lon:50.00, sog:12.0,cog:155,heading:155,shipType:80,status:0,destination:'INMUN',source:'Demo' },
+      { mmsi:'370300000',name:'MSC COLOMBO',          callsign:'9VCB1', lat:6.90, lon:79.85, sog:8.0, cog:340,heading:340,shipType:71,status:0,destination:'LKCMB',source:'Demo' },
+      { mmsi:'370400000',name:'INS VIKRANT',          callsign:'VTAB1', lat:15.00,lon:72.00, sog:18.0,cog:200,heading:200,shipType:35,status:0,destination:'INMAA',source:'Demo' },
+      { mmsi:'370500000',name:'LNG KARACHI',          callsign:'APLNG', lat:24.80,lon:66.90, sog:11.0,cog:90, heading:90, shipType:84,status:0,destination:'PKBQM',source:'Demo' },
+      { mmsi:'370600000',name:'COSCO PACIFIC',        callsign:'BOZZ1', lat:1.20, lon:103.9, sog:12.0,cog:280,heading:280,shipType:71,status:0,destination:'SGSIN',source:'Demo' },
+      { mmsi:'370700000',name:'GIBRALTAR TRADER',     callsign:'GIBX1', lat:36.00,lon:-5.60, sog:14.0,cog:90, heading:90, shipType:70,status:0,destination:'GBFXT',source:'Demo' },
+      { mmsi:'371200000',name:'MT GULF TRADER',       callsign:'A7GTX', lat:26.00,lon:56.50, sog:13.0,cog:100,heading:100,shipType:80,status:0,destination:'AEDXB',source:'Demo' },
+      { mmsi:'371300000',name:'NORDIC GAS',           callsign:'OULNG', lat:60.50,lon:4.50,  sog:16.0,cog:180,heading:180,shipType:84,status:0,destination:'NLRTM',source:'Demo' },
+      { mmsi:'371500000',name:'OOCL PANAMA',          callsign:'C6PAN', lat:9.00, lon:-79.5, sog:10.0,cog:315,heading:315,shipType:71,status:0,destination:'USLAX',source:'Demo' },
+      { mmsi:'371700000',name:'CAPE HORN CARRIER',    callsign:'LQCPH', lat:-55.0,lon:-67.0, sog:11.0,cog:90, heading:90, shipType:70,status:0,destination:'ARBUE',source:'Demo' },
+      { mmsi:'371800000',name:'CAPE TRADER',          callsign:'ZSCPT', lat:-34.0,lon:18.50, sog:13.0,cog:120,heading:120,shipType:70,status:0,destination:'ZAJNB',source:'Demo' },
+    ];
+    _render(DEMO);
+  }
+
+  // ── Detail renderer ───────────────────────────────────────────
+  DETAIL_RENDERERS['ship'] = (d) => {
+    const style  = CLS_STYLE[d.classification] || CLS_STYLE.OTHER;
+    const col    = style.color;
+    const navSt  = NAV_STATUS[d.status] || 'Unknown';
+    const sogKts = d.sog != null ? `${d.sog.toFixed(1)} kts` : '—';
+    const sogKmh = d.sog != null ? `(${(d.sog*1.852).toFixed(0)} km/h)` : '';
+    const clsIcon= d.classification==='NAVAL'?'⚓':d.classification==='TANKER'?'⚠':d.classification==='PASSENGER'?'🚢':'📦';
+    return `
+      <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
+      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">
+        ${clsIcon} ${style.label}
+      </span>
+      <div class="detail-grid" style="margin-top:6px">
+        <div><div class="dg-cell-label">MMSI</div><div class="dg-cell-value">${d.mmsi||'—'}</div></div>
+        <div><div class="dg-cell-label">Callsign</div><div class="dg-cell-value">${d.callsign||'—'}</div></div>
+        <div><div class="dg-cell-label">Speed</div><div class="dg-cell-value">${sogKts} ${sogKmh}</div></div>
+        <div><div class="dg-cell-label">Course</div><div class="dg-cell-value">${d.cog!=null?Math.round(d.cog)+'°':'—'}</div></div>
+        <div><div class="dg-cell-label">Destination</div><div class="dg-cell-value">${d.destination||'—'}</div></div>
+        <div><div class="dg-cell-label">Nav Status</div><div class="dg-cell-value" style="font-size:0.5rem">${navSt}</div></div>
+        ${d.draught?`<div><div class="dg-cell-label">Draught</div><div class="dg-cell-value">${d.draught}m</div></div>`:''}
+        ${d.length ?`<div><div class="dg-cell-label">Length</div><div class="dg-cell-value">${d.length}m</div></div>`:''}
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">${d.source||'—'}</div></div>
+      </div>`;
+  };
+
+  // ── Main refresh ──────────────────────────────────────────────
+  LAYER_REGISTRY.MARITIME.refresh = async function () {
+    UI.setStatus('maritime', 'FETCHING', 'warn');
+    LOG.add('[MARITIME] Polling AIS sources (parallel)...', 'sys');
+
+    const [aisResult, vtResult] = await Promise.allSettled([
+      _fetchAISHub(), _fetchVTExplorer(),
+    ]);
+
+    const mmsiMap = new Map();
+    let anySuccess = false;
+
+    for (const r of [aisResult, vtResult]) {
+      if (r.status === 'fulfilled' && r.value.length > 0) {
+        anySuccess = true;
+        r.value.forEach(v => { if (!mmsiMap.has(v.mmsi)) mmsiMap.set(v.mmsi, v); });
+      }
+    }
+
+    if (!anySuccess || mmsiMap.size === 0) { _demo(); return; }
+
+    // Sanitise + cap at 2000
+    const clean = [];
+    for (const v of mmsiMap.values()) {
+      if (!isFinite(v.lat)||!isFinite(v.lon)) continue;
+      if (Math.abs(v.lat)>90||Math.abs(v.lon)>180) continue;
+      clean.push(v);
+      if (clean.length >= 2000) break;
+    }
+
+    if (!clean.length) { _demo(); return; }
+    _render(clean);
+  };
+
+  LOG.add('[MARITIME] v2 module loaded', 'ship');
+  UI.setStatus('maritime', 'LOADING', 'warn');
+  setTimeout(() => LAYER_REGISTRY.MARITIME.refresh(), 1600);
+
+  return { refresh: () => LAYER_REGISTRY.MARITIME.refresh() };
+
+})(); // END MARITIME_MODULE
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  SATELLITE_MODULE  —  v2 UPGRADED                           ║
+// ║  Source  : Celestrak group TLE files (entire catalog)       ║
+// ║  Objects : All active satellites in orbit (~6000+)          ║
+// ║  Features: Orbit-type colouring, 5s tick, full details      ║
+// ╚══════════════════════════════════════════════════════════════╝
+const SATELLITE_MODULE = (() => {
+
+  // ── Celestrak TLE group URLs — fetched as bulk text ──────────
+  // Each file contains ALL sats in that category as 3-line TLE sets
+  const TLE_GROUPS = [
+    { url:'https://celestrak.org/SOCRATES/query.php?CODE=ISS&FORMAT=tle',
+      label:'STATION', color:'#00ff9d', priority:1 },
+    { url:'https://celestrak.org/pub/TLE/catalog.txt',
+      label:'ALL',     color:null,      priority:2 },  // full catalog fallback
+    { url:'https://celestrak.org/SOCRATES/query.php?CODE=active&FORMAT=tle',
+      label:'ACTIVE',  color:null,      priority:2 },
+  ];
+
+  // Primary: fetch these specific group files
+  const TLE_URLS = [
+    { url:'https://celestrak.org/pub/TLE/tle-new.txt',       cat:'RECENT',    color:'#00ff9d', priority:1 },
+    { url:'https://celestrak.org/pub/TLE/stations.txt',      cat:'STATION',   color:'#00ff9d', priority:1 },
+    { url:'https://celestrak.org/pub/TLE/starlink.txt',      cat:'STARLINK',  color:'#00d4ff', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/oneweb.txt',        cat:'ONEWEB',    color:'#00d4ff', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/planet.txt',        cat:'EO',        color:'#c8ff00', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/geo.txt',           cat:'GEO',       color:'#ffe600', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/gps-ops.txt',       cat:'GPS',       color:'#b44fff', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/glo-ops.txt',       cat:'GLONASS',   color:'#b44fff', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/galileo.txt',       cat:'GALILEO',   color:'#b44fff', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/beidou.txt',        cat:'BEIDOU',    color:'#b44fff', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/weather.txt',       cat:'WEATHER',   color:'#ffe600', priority:1 },
+    { url:'https://celestrak.org/pub/TLE/noaa.txt',          cat:'NOAA',      color:'#ffe600', priority:1 },
+    { url:'https://celestrak.org/pub/TLE/resource.txt',      cat:'EO',        color:'#c8ff00', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/sarsat.txt',        cat:'SAR',       color:'#ff3c3c', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/military.txt',      cat:'MIL',       color:'#ff3c3c', priority:1 },
+    { url:'https://celestrak.org/pub/TLE/radar.txt',         cat:'RADAR',     color:'#ff9900', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/iridium.txt',       cat:'IRIDIUM',   color:'#00d4ff', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/orbcomm.txt',       cat:'ORBCOMM',   color:'#00d4ff', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/amateur.txt',       cat:'AMATEUR',   color:'#44ffcc', priority:2 },
+    { url:'https://celestrak.org/pub/TLE/active.txt',        cat:'ACTIVE',    color:null,      priority:2 },
+  ];
+
+  // ── Colour by orbit/category ──────────────────────────────────
+  const CAT_COLORS = {
+    STATION:'#00ff9d', STARLINK:'#00d4ff', ONEWEB:'#00aaff',
+    GPS:'#b44fff',     GLONASS:'#9944ff',  GALILEO:'#aa44ff', BEIDOU:'#cc44ff',
+    WEATHER:'#ffe600', NOAA:'#ffaa00',     EO:'#c8ff00',      RESOURCE:'#aaff00',
+    MIL:'#ff3c3c',     RADAR:'#ff6600',    SAR:'#ff3c3c',
+    IRIDIUM:'#00d4ff', ORBCOMM:'#00bbdd',  AMATEUR:'#44ffcc',
+    GEO:'#ffe600',     RECENT:'#00ff9d',   ACTIVE:'#44ffcc',
+  };
+
+  // ── Parse raw TLE text → array of {name, line1, line2, cat, color} ──
+  function _parseTLE(text, cat, defaultColor) {
+    const lines   = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
+    const results = [];
+    for (let i = 0; i + 2 < lines.length; i++) {
+      if (lines[i+1].startsWith('1 ') && lines[i+2].startsWith('2 ')) {
+        const name  = lines[i].replace(/^0 /, '').trim();
+        const line1 = lines[i+1];
+        const line2 = lines[i+2];
+        // Basic validity check on line2 length
+        if (line2.length < 63) { i += 2; continue; }
+        const norad = line1.substring(2, 7).trim();
+        const color = defaultColor || CAT_COLORS[cat] || '#44ffcc';
+        results.push({ name, line1, line2, norad, cat, color });
+        i += 2;
+      }
+    }
+    return results;
+  }
+
+  // ── Fetch one TLE group with timeout ─────────────────────────
+  async function _fetchGroup(entry) {
+    const res = await fetch(entry.url, { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    if (!text || text.length < 100) throw new Error('Empty TLE response');
+    return _parseTLE(text, entry.cat, entry.color);
+  }
+
+  // ── SGP4-lite propagator (unchanged — battle-tested NaN guard) ─
+  function _propagate(tle, minutesOffset) {
+    try {
+      if (!tle?.line2 || tle.line2.length < 63) return null;
+      const l2   = tle.line2;
+      const inc  = parseFloat(l2.substring(8,  16)) * Math.PI / 180;
+      const raan = parseFloat(l2.substring(17, 25)) * Math.PI / 180;
+      const ecc  = parseFloat('0.' + l2.substring(26, 33).trim());
+      const argp = parseFloat(l2.substring(34, 42)) * Math.PI / 180;
+      const ma0  = parseFloat(l2.substring(43, 51)) * Math.PI / 180;
+      const mm   = parseFloat(l2.substring(52, 63));
+
+      if ([inc,raan,ecc,argp,ma0,mm].some(v => !isFinite(v))) return null;
+      if (mm <= 0 || mm > 20) return null;
+      if (ecc < 0 || ecc >= 1) return null;
+
+      const mu = 398600.4418;
+      const n  = mm * 2 * Math.PI / 86400;
+      const a  = Math.cbrt(mu / (n * n));
+      const Ma = ma0 + n * minutesOffset * 60;
+
+      let E = Ma;
+      for (let i = 0; i < 8; i++) E = Ma + ecc * Math.sin(E);
+
+      const nu = 2 * Math.atan2(
+        Math.sqrt(1+ecc)*Math.sin(E/2), Math.sqrt(1-ecc)*Math.cos(E/2)
+      );
+      const r  = a * (1 - ecc * Math.cos(E));
+      const xo = r * Math.cos(nu), yo = r * Math.sin(nu);
+
+      const cosO=Math.cos(raan),sinO=Math.sin(raan);
+      const cosI=Math.cos(inc), sinI=Math.sin(inc);
+      const cosw=Math.cos(argp),sinw=Math.sin(argp);
+
+      const x=(cosO*cosw-sinO*sinw*cosI)*xo+(-cosO*sinw-sinO*cosw*cosI)*yo;
+      const y=(sinO*cosw+cosO*sinw*cosI)*xo+(-sinO*sinw+cosO*cosw*cosI)*yo;
+      const z=(sinI*sinw)*xo+(sinI*cosw)*yo;
+
+      const nowD = Date.now()/86400000 + 2440587.5 - 2451545.0;
+      const gmst = (280.46061837 + 360.98564736629*nowD + minutesOffset*0.25068)*Math.PI/180;
+      const cosG=Math.cos(gmst), sinG=Math.sin(gmst);
+
+      const xe=x*cosG+y*sinG, ye=-x*sinG+y*cosG, ze=z;
+      const p  =Math.sqrt(xe*xe+ye*ye);
+      const lon=Math.atan2(ye,xe)*180/Math.PI;
+      const lat=Math.atan2(ze,p*0.99330562)*180/Math.PI;
+      const altM=(Math.sqrt(xe*xe+ye*ye+ze*ze)-6371)*1000;
+
+      if (!isFinite(lat)||!isFinite(lon)||!isFinite(altM)) return null;
+      const latC=Math.max(-89.9,Math.min(89.9,lat));
+      const lonC=((lon+540)%360)-180;
+      return { lat:latC, lon:lonC, altM:Math.max(altM, 200_000) };
+    } catch(e) { return null; }
+  }
+
+  // ── Build orbital path (60 points, 1 full period) ─────────────
+  function _buildOrbitPath(tle) {
+    const mm = parseFloat(tle.line2.substring(52, 63));
+    if (!isFinite(mm) || mm <= 0) return [];
+    const period = 1440 / mm;
+    const STEPS  = 60;
+    const pts    = [];
+    for (let i = 0; i <= STEPS; i++) {
+      try {
+        const pos = _propagate(tle, (i/STEPS) * period);
+        if (pos
+          && isFinite(pos.lat) && isFinite(pos.lon) && isFinite(pos.altM)
+          && Math.abs(pos.lat) <= 90 && Math.abs(pos.lon) <= 180 && pos.altM > 0
+        ) {
+          pts.push(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.altM));
+        }
+      } catch(e) {}
+    }
+    return pts;
+  }
+
+  // ── Satellite icon (simplified for large catalog) ─────────────
+  const _iconCache = {};
+  function _makeSatIcon(color, cat) {
+    const key = `${color}_${cat}`;
+    if (_iconCache[key]) return _iconCache[key];
+    const SZ  = 20;
+    const c   = document.createElement('canvas');
+    c.width   = c.height = SZ;
+    const ctx = c.getContext('2d');
+    ctx.shadowColor = color; ctx.shadowBlur = 10;
+    ctx.strokeStyle = color; ctx.fillStyle  = color; ctx.lineWidth = 1.2;
+
+    if (cat === 'STATION') {
+      // ISS-style cross with solar panels
+      ctx.strokeRect(4,8,12,4);
+      ctx.fillRect(1,9,3,2); ctx.fillRect(16,9,3,2); ctx.fillRect(9,4,2,12);
+    } else if (cat === 'MIL' || cat === 'RADAR') {
+      // Diamond for recon/mil
+      ctx.beginPath();
+      ctx.moveTo(10,2); ctx.lineTo(18,10); ctx.lineTo(10,18); ctx.lineTo(2,10);
+      ctx.closePath(); ctx.stroke();
+      ctx.fillStyle = color+'33'; ctx.fill();
+    } else if (cat === 'GPS' || cat === 'GLONASS' || cat === 'GALILEO' || cat === 'BEIDOU') {
+      // Nav — hexagon
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i*60-90)*Math.PI/180;
+        i===0?ctx.moveTo(10+8*Math.cos(a),10+8*Math.sin(a)):ctx.lineTo(10+8*Math.cos(a),10+8*Math.sin(a));
+      }
+      ctx.closePath(); ctx.stroke();
+    } else {
+      // Generic cross-in-circle
+      ctx.beginPath(); ctx.arc(10,10,5,0,Math.PI*2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(10,2);ctx.lineTo(10,6);  ctx.moveTo(10,14);ctx.lineTo(10,18);
+      ctx.moveTo(2,10);ctx.lineTo(6,10);  ctx.moveTo(14,10);ctx.lineTo(18,10);
+      ctx.stroke();
+    }
+    _iconCache[key] = c;
+    return c;
+  }
+
+  const _active = [];
+  let   _ticker = null;
+
+  function _tick() {
+    _active.forEach(sat => {
+      const pos = _propagate(sat.tle, 0);
+      if (!pos || !sat.entity) return;
+      if (!isFinite(pos.lat)||!isFinite(pos.lon)||!isFinite(pos.altM)) return;
+      try {
+        sat.entity.position = Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.altM);
+        if (sat.entity._oeData) {
+          sat.entity._oeData.lat  = pos.lat;
+          sat.entity._oeData.lon  = pos.lon;
+          sat.entity._oeData.altM = pos.altM;
+        }
+      } catch(e) {}
+    });
+  }
+
+  // ── Render — handles thousands of sats efficiently ────────────
+  // Orbital paths only for priority-1 sats (stations, weather, mil)
+  // All others just get a billboard + live tick
+  async function _render(catalog) {
+    const layer = LAYER_REGISTRY.SATELLITE;
+    layer.entities.entities.removeAll();
+    _active.length = 0;
+    if (_ticker) { clearInterval(_ticker); _ticker = null; }
+
+    let rendered = 0;
+
+    for (const sat of catalog) {
+      const pos = _propagate(sat, 0);
+      if (!pos || !isFinite(pos.lat) || !isFinite(pos.lon) || !isFinite(pos.altM)) continue;
+
+      // Orbital path only for priority-1 categories (keeps performance sane with 1000s of sats)
+      if (sat.priority === 1) {
+        const pathPts = _buildOrbitPath(sat);
+        if (pathPts.length >= 4) {
+          layer.entities.entities.add({
+            polyline: {
+              positions: pathPts,
+              width:     1.5,
+              material:  new Cesium.PolylineGlowMaterialProperty({
+                glowPower: 0.2,
+                color: Cesium.Color.fromCssColorString(sat.color).withAlpha(0.5),
+              }),
+              clampToGround: false,
+              arcType: Cesium.ArcType.NONE,
+            },
+          });
+        }
+      }
+
+      const icon = _makeSatIcon(sat.color, sat.cat);
+      const sz   = sat.priority === 1 ? 20 : 12;
+
+      const entity = layer.entities.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.altM),
+        billboard: {
+          image: icon, width: sz, height: sz,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          scaleByDistance: new Cesium.NearFarScalar(500_000, 1.2, 25_000_000, 0.3),
+          disableDepthTestDistance: 500,
+        },
+        label: {
+          text:  sat.name,
+          font:  '9px Share Tech Mono, monospace',
+          fillColor:    Cesium.Color.fromCssColorString(sat.color),
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -14),
+          // Labels only show for priority-1 sats + when zoomed in
+          scaleByDistance: sat.priority === 1
+            ? new Cesium.NearFarScalar(500_000, 1.0, 10_000_000, 0.0)
+            : new Cesium.NearFarScalar(500_000, 0.8, 3_000_000, 0.0),
+          disableDepthTestDistance: 500,
+          showBackground:    sat.priority === 1,
+          backgroundColor:   Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),
+          backgroundPadding: new Cesium.Cartesian2(3, 2),
+        },
+      });
+
+      const incDeg = parseFloat(sat.line2.substring(8,16));
+      const mmVal  = parseFloat(sat.line2.substring(52,63));
+      const periodMin = isFinite(mmVal) && mmVal>0 ? Math.round(1440/mmVal) : null;
+      const altKm  = Math.round(pos.altM / 1000);
+
+      entity._oeData = {
+        ...sat, ...pos, type:'satellite', classification: sat.cat,
+        periodMin, incDeg: isFinite(incDeg) ? incDeg.toFixed(2) : null,
+        altKm,
+      };
+
+      _active.push({ tle: sat, entity });
+      rendered++;
+    }
+
+    _ticker = setInterval(_tick, 5_000);  // 5s tick for smoother movement
+    layer.count = rendered;
+    LAYER_REGISTRY._sync('SATELLITE');
+    LOG.add(`[SAT] ${rendered} satellites plotted from Celestrak catalog`, 'sat');
+    UI.setStatus('satellite', `LIVE · ${rendered}`, 'ok');
+    document.getElementById('sb-sats').innerHTML = `SATS <span>${rendered}</span>`;
+  }
+
+  // ── Detail renderer ───────────────────────────────────────────
+  DETAIL_RENDERERS['satellite'] = (d) => {
+    const col    = d.color || '#44ffcc';
+    const altStr = d.altKm ? `${d.altKm.toLocaleString()} km` : '—';
+    const catBadge = {
+      STATION:'🛸 SPACE STATION', STARLINK:'📡 STARLINK', GPS:'🔵 GPS NAV',
+      GLONASS:'🔵 GLONASS NAV',  GALILEO:'🔵 GALILEO',   BEIDOU:'🔵 BEIDOU',
+      WEATHER:'🌤 WEATHER',      NOAA:'🌤 NOAA',          EO:'📷 EARTH OBS',
+      MIL:'🔴 MILITARY',         RADAR:'🔴 RADAR',        SAR:'🔴 SAR',
+      IRIDIUM:'📡 IRIDIUM',      ONEWEB:'📡 ONEWEB',      AMATEUR:'📻 AMATEUR',
+      GEO:'🌍 GEO',              ACTIVE:'🛰 ACTIVE',
+    }[d.cat] || `🛰 ${d.cat||'SATELLITE'}`;
+    return `
+      <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
+      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${catBadge}</span>
+      <div class="detail-grid" style="margin-top:6px">
+        <div><div class="dg-cell-label">NORAD ID</div><div class="dg-cell-value">${d.norad||'—'}</div></div>
+        <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value" style="color:${col}">${altStr}</div></div>
+        <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat!=null?d.lat.toFixed(3)+'°':'—'}</div></div>
+        <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon!=null?d.lon.toFixed(3)+'°':'—'}</div></div>
+        <div><div class="dg-cell-label">Inclination</div><div class="dg-cell-value">${d.incDeg!=null?d.incDeg+'°':'—'}</div></div>
+        <div><div class="dg-cell-label">Orbital Period</div><div class="dg-cell-value">${d.periodMin?d.periodMin+' min':'—'}</div></div>
+        <div><div class="dg-cell-label">Category</div><div class="dg-cell-value">${d.cat||'—'}</div></div>
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">Celestrak TLE</div></div>
+      </div>`;
+  };
+
+  // ── Main refresh — fetch all groups in parallel ───────────────
+  LAYER_REGISTRY.SATELLITE.refresh = async function () {
+    UI.setStatus('satellite', 'FETCHING', 'warn');
+    LOG.add('[SAT] Fetching Celestrak TLE catalog groups in parallel...', 'sys');
+
+    const results = await Promise.allSettled(TLE_URLS.map(_fetchGroup));
+
+    // Deduplicate by NORAD ID — priority-1 categories win
+    const noradMap = new Map();
+    let   total    = 0;
+
+    // Process priority-1 first, then priority-2
+    const sorted = TLE_URLS.map((entry, i) => ({ entry, result: results[i] }))
+      .sort((a,b) => a.entry.priority - b.entry.priority);
+
+    for (const { entry, result } of sorted) {
+      if (result.status === 'rejected') {
+        LOG.add(`[SAT] ${entry.cat} failed — ${result.reason?.message}`, 'warn');
+        continue;
+      }
+      let added = 0;
+      for (const sat of result.value) {
+        // Assign priority from the URL entry that fetched it
+        sat.priority = entry.priority;
+        if (!noradMap.has(sat.norad)) {
+          noradMap.set(sat.norad, sat);
+          added++;
+          total++;
+        }
+      }
+      LOG.add(`[SAT] ${entry.cat}: ${added} objects loaded`, 'sat');
+    }
+
+    if (total === 0) {
+      LOG.add('[SAT] All TLE fetches failed — satellites offline', 'warn');
+      UI.setStatus('satellite', 'OFFLINE', 'err');
+      return;
+    }
+
+    LOG.add(`[SAT] ${total} unique objects in catalog — rendering...`, 'sat');
+    await _render(Array.from(noradMap.values()));
+  };
+
+  LOG.add('[SAT] v2 module loaded — full Celestrak catalog mode', 'sat');
+  UI.setStatus('satellite', 'LOADING', 'warn');
+  setTimeout(() => LAYER_REGISTRY.SATELLITE.refresh(), 3200);
+
+  return { refresh: () => LAYER_REGISTRY.SATELLITE.refresh() };
+
+})(); // END SATELLITE_MODULE
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  ENVIRONMENT_MODULE  —  Phase 2                             ║
+// ║  FIRMS   : NASA VIIRS 24h global fire detections            ║
+// ║  WEATHER : RainViewer live precipitation radar overlay      ║
+// ╚══════════════════════════════════════════════════════════════╝
+const ENVIRONMENT_MODULE = (() => {
+
+  // No bbox — FIRMS CSV and RainViewer are both already global
+  let _rainLayer = null;
+
+  // ── NASA FIRMS ────────────────────────────────────────────────
+  const FIRMS_URL =
+    'https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_Global_24h.csv';
+
+  async function _fetchFires() {
+    const res = await fetch(FIRMS_URL, { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`FIRMS HTTP ${res.status}`);
+    const csv = await res.text();
+    if (!csv || csv.length < 100) throw new Error('FIRMS: empty CSV');
+
+    const lines  = csv.trim().split('\n');
+    const header = lines[0].split(',').map(h => h.trim().replace(/"/g,''));
+    const iLat   = header.indexOf('latitude');
+    const iLon   = header.indexOf('longitude');
+    const iConf  = header.indexOf('confidence');
+    const iFrp   = header.indexOf('frp');
+    const iDate  = header.indexOf('acq_date');
+    if (iLat < 0 || iLon < 0) throw new Error('FIRMS: unexpected CSV format');
+
+    return lines.slice(1).filter(l => l.trim()).map(l => {
+      const c = l.split(',');
+      return {
+        lat:  parseFloat(c[iLat]),
+        lon:  parseFloat(c[iLon]),
+        conf: iConf >= 0 ? (parseFloat(c[iConf]) || 50) : 50,
+        frp:  iFrp  >= 0 ? (parseFloat(c[iFrp])  || 0)  : 0,
+        date: iDate >= 0 ? c[iDate] : '',
+      };
+    }).filter(f =>
+      // Global coverage — filter only for validity + confidence threshold
+      isFinite(f.lat) && isFinite(f.lon) &&
+      f.lat >= -90 && f.lat <= 90 && f.lon >= -180 && f.lon <= 180 &&
+      f.conf >= 60
+    );
+  }
+
+  function _makeFireIcon(frp) {
+    const inten = Math.min((frp || 0) / 80, 1.0);
+    const sz    = Math.round(14 + inten * 14);
+    const c     = document.createElement('canvas');
+    c.width = c.height = sz;
+    const ctx = c.getContext('2d');
+    const cx  = sz / 2;
+    const g   = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
+    g.addColorStop(0,   `rgba(255,120,0,${0.7 + inten*0.25})`);
+    g.addColorStop(0.5, `rgba(255,50,0,${0.4 + inten*0.2})`);
+    g.addColorStop(1,   'rgba(200,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cx, cx, cx, 0, Math.PI*2); ctx.fill();
+    ctx.shadowColor = '#ffee00'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath(); ctx.arc(cx, cx, 2 + inten*2, 0, Math.PI*2); ctx.fill();
+    return c;
+  }
+
+  async function _renderFires(fires) {
+    const layer = LAYER_REGISTRY.ENVIRONMENT;
+    // Remove stale fire entities only
+    const toRemove = layer.entities.entities.values.filter(e => e._oeType === 'fire');
+    toRemove.forEach(e => layer.entities.entities.remove(e));
+
+    // Cap at 2000 hotspots — sort by FRP desc so brightest fires render first
+    const capped = fires.sort((a,b) => (b.frp||0) - (a.frp||0)).slice(0, 2000);
+
+    capped.forEach(f => {
+      const icon   = _makeFireIcon(f.frp);
+      const entity = layer.entities.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, 10),
+        billboard: {
+          image:  icon, width: icon.width, height: icon.height,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          scaleByDistance:       new Cesium.NearFarScalar(5_000, 2.5, 2_000_000, 0.4),
+          translucencyByDistance: new Cesium.NearFarScalar(50_000, 1.0, 3_000_000, 0.15),
+          disableDepthTestDistance: 500,  // depth-test ON beyond 500m — hides behind globe
+        },
+      });
+      entity._oeType = 'fire';
+      entity._oeData = { ...f, type:'fire', name:'THERMAL HOTSPOT', classification:'FIRE' };
+    });
+
+    layer.count = capped.length;
+    LAYER_REGISTRY._sync('ENVIRONMENT');
+    UI.setStatus('fires', `LIVE \xb7 ${capped.length}`, 'ok');
+    document.getElementById('sb-fires').innerHTML = `FIRES <span>${capped.length}</span>`;
+    LOG.add(`[FIRMS] ${capped.length} hotspots plotted globally (${fires.length} total detected)`, 'warn');
+    if (fires.length > 200)
+      LOG.add(`[FIRMS] HIGH GLOBAL FIRE ACTIVITY \u2014 ${fires.length} active detections`, 'alrt');
+  }
+
+  // ── RainViewer Radar ─────────────────────────────────────────
+  async function _loadWeather() {
+    UI.setStatus('weather', 'FETCHING', 'warn');
+    try {
+      const apiRes  = await PROXY.get('https://api.rainviewer.com/public/weather-maps.json',
+                                     { timeout: 8000 });
+      if (!apiRes.ok) throw new Error(`RainViewer HTTP ${apiRes.status}`);
+      const data    = await apiRes.json();
+      const frames  = data.radar?.past;
+      if (!frames?.length) throw new Error('RainViewer: no radar frames');
+
+      const latest = frames[frames.length - 1];
+      const host   = data.host;
+
+      if (_rainLayer) {
+        scene.imageryLayers.remove(_rainLayer, true);
+        _rainLayer = null;
+      }
+
+      const provider = new Cesium.UrlTemplateImageryProvider({
+        url:          `${host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`,
+        minimumLevel: 1,
+        maximumLevel: 6,
+        credit:       'RainViewer.com',
+      });
+      _rainLayer             = scene.imageryLayers.addImageryProvider(provider);
+      _rainLayer.alpha       = 0.45;
+      _rainLayer.show        = LAYER_REGISTRY.ENVIRONMENT.enabled;
+      _rainLayer.brightness  = 1.4;
+      _rainLayer.saturation  = 1.2;
+
+      const ts = new Date(latest.time * 1000).toISOString().slice(11,16);
+      UI.setStatus('weather', `LIVE \xb7 ${ts}Z`, 'ok');
+      LOG.add(`[WEATHER] RainViewer radar loaded \u2014 ${ts}Z frame`, 'sys');
+    } catch(e) {
+      LOG.add(`[WEATHER] RainViewer failed \u2014 ${e.message}`, 'warn');
+      UI.setStatus('weather', 'OFFLINE', 'err');
+    }
+  }
+
+  // ── Detail renderer for fire hotspots ────────────────────────
+  DETAIL_RENDERERS['fire'] = (d) => `
+    <div class="detail-name" style="color:var(--orange)">\ud83d\udd25 THERMAL HOTSPOT</div>
+    <span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,100,0,0.4);background:rgba(255,100,0,0.08)">
+      \u26a0 ACTIVE FIRE \u2014 NASA VIIRS
+    </span>
+    <div class="detail-grid" style="margin-top:6px">
+      <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat?.toFixed(4)}\xb0</div></div>
+      <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon?.toFixed(4)}\xb0</div></div>
+      <div><div class="dg-cell-label">FRP (Power)</div><div class="dg-cell-value">${d.frp ? d.frp.toFixed(1)+' MW' : '\u2014'}</div></div>
+      <div><div class="dg-cell-label">Confidence</div><div class="dg-cell-value">${d.conf ? d.conf+'%' : '\u2014'}</div></div>
+      <div><div class="dg-cell-label">Detected</div><div class="dg-cell-value">${d.date || '\u2014'}</div></div>
+      <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">NASA FIRMS VIIRS</div></div>
+    </div>`;
+
+  // Hook LAYER_REGISTRY.toggle to sync rain layer visibility
+  const _origToggle = LAYER_REGISTRY.toggle.bind(LAYER_REGISTRY);
+  LAYER_REGISTRY.toggle = function(id) {
+    _origToggle(id);
+    if (id === 'ENVIRONMENT' && _rainLayer)
+      _rainLayer.show = this.ENVIRONMENT.enabled;
+  };
+
+  // ── Main refresh ──────────────────────────────────────────────
+  LAYER_REGISTRY.ENVIRONMENT.refresh = async function () {
+    LOG.add('[ENV] Polling NASA FIRMS + RainViewer...', 'sys');
+    const [fireResult] = await Promise.allSettled([
+      _fetchFires().then(_renderFires),
+      _loadWeather(),
+    ]);
+    if (fireResult.status === 'rejected') {
+      LOG.add(`[FIRMS] Fire data failed \u2014 ${fireResult.reason?.message}`, 'warn');
+      UI.setStatus('fires', 'OFFLINE', 'err');
+    }
+  };
+
+  LOG.add('[ENV] Environment module loaded', 'sys');
+  UI.setStatus('fires',   'LOADING', 'warn');
+  UI.setStatus('weather', 'LOADING', 'warn');
+  setTimeout(() => LAYER_REGISTRY.ENVIRONMENT.refresh(), 4800);
+
+  return { refresh: () => LAYER_REGISTRY.ENVIRONMENT.refresh() };
+
+})(); // END ENVIRONMENT_MODULE
+
+</script>
+
+</body>
+</html>

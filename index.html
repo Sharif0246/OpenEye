@@ -2577,81 +2577,78 @@ const MARITIME_MODULE = (() => {
 // ╚══════════════════════════════════════════════════════════════╝
 const SATELLITE_MODULE = (() => {
 
-  const N2YO_KEY = 'UFL4K5-2D6CEX-CQFYNS-5OES';
-
-  // ── Curated catalog — key satellites by NORAD ID ─────────────
-  // Fetched individually via N2YO — rich position data, no TLE parsing needed
+  // ── Curated catalog — 24 key objects ─────────────────────────
   const SAT_CATALOG = [
-    // Space Stations
-    {norad:'25544', name:'ISS',             cat:'STATION',  color:'#00ff9d', priority:1},
-    {norad:'48274', name:'CSS (Tiangong)',   cat:'STATION',  color:'#ff9900', priority:1},
-    // Navigation
-    {norad:'43473', name:'GPS IIF-12',       cat:'GPS',      color:'#b44fff', priority:2},
-    {norad:'37753', name:'GLONASS-M 730',    cat:'GLONASS',  color:'#9944ff', priority:2},
-    {norad:'37846', name:'GALILEO-101',      cat:'GALILEO',  color:'#aa44ff', priority:2},
-    {norad:'44231', name:'BEIDOU-3 M1',      cat:'BEIDOU',   color:'#cc44ff', priority:2},
-    // Weather
-    {norad:'38337', name:'SUOMI NPP',        cat:'WEATHER',  color:'#ffe600', priority:1},
-    {norad:'41240', name:'GOES-16',          cat:'WEATHER',  color:'#ffe600', priority:1},
-    {norad:'43226', name:'HIMAWARI-9',       cat:'WEATHER',  color:'#ffe600', priority:1},
-    {norad:'44713', name:'INSAT-3DR',        cat:'WEATHER',  color:'#ffaa00', priority:1},
-    // Earth Obs
-    {norad:'43689', name:'SENTINEL-3B',      cat:'EO',       color:'#c8ff00', priority:2},
-    {norad:'39634', name:'RESOURCESAT-2',    cat:'EO',       color:'#c8ff00', priority:2},
-    // Comms / GEO
-    {norad:'43286', name:'BANGABANDHU-1',    cat:'GEO',      color:'#00d4ff', priority:1},
-    {norad:'41838', name:'GSAT-18',          cat:'GEO',      color:'#00d4ff', priority:2},
-    {norad:'45026', name:'INTELSAT-39',      cat:'GEO',      color:'#00d4ff', priority:2},
-    // Military / Recon
-    {norad:'27386', name:'USA-186',          cat:'MIL',      color:'#ff3c3c', priority:1},
-    {norad:'44502', name:'COSMO-4',          cat:'MIL',      color:'#ff3c3c', priority:2},
-    {norad:'48465', name:'YAOGAN-32B',       cat:'MIL',      color:'#ff3c3c', priority:2},
-    // Comms constellations (samples)
-    {norad:'44713', name:'STARLINK-1',       cat:'STARLINK', color:'#00aaff', priority:2},
-    {norad:'44915', name:'STARLINK-24',      cat:'STARLINK', color:'#00aaff', priority:2},
-    {norad:'47687', name:'ONEWEB-0222',      cat:'ONEWEB',   color:'#00bbdd', priority:2},
-    {norad:'25544', name:'IRIDIUM-100',      cat:'IRIDIUM',  color:'#00d4ff', priority:2},
-    // Amateur
-    {norad:'07530', name:'OSCAR-7',          cat:'AMATEUR',  color:'#44ffcc', priority:2},
+    {norad:'25544', name:'ISS',            cat:'STATION',  color:'#00ff9d', priority:1},
+    {norad:'48274', name:'CSS (Tiangong)', cat:'STATION',  color:'#ff9900', priority:1},
+    {norad:'43473', name:'GPS IIF-12',     cat:'GPS',      color:'#b44fff', priority:2},
+    {norad:'37753', name:'GLONASS-M 730',  cat:'GLONASS',  color:'#9944ff', priority:2},
+    {norad:'37846', name:'GALILEO-101',    cat:'GALILEO',  color:'#aa44ff', priority:2},
+    {norad:'44231', name:'BEIDOU-3 M1',    cat:'BEIDOU',   color:'#cc44ff', priority:2},
+    {norad:'38337', name:'SUOMI NPP',      cat:'WEATHER',  color:'#ffe600', priority:1},
+    {norad:'41240', name:'GOES-16',        cat:'WEATHER',  color:'#ffe600', priority:1},
+    {norad:'43226', name:'HIMAWARI-9',     cat:'WEATHER',  color:'#ffaa00', priority:1},
+    {norad:'44713', name:'INSAT-3DR',      cat:'WEATHER',  color:'#ffaa00', priority:1},
+    {norad:'43689', name:'SENTINEL-3B',    cat:'EO',       color:'#c8ff00', priority:2},
+    {norad:'39634', name:'RESOURCESAT-2',  cat:'EO',       color:'#c8ff00', priority:2},
+    {norad:'43286', name:'BANGABANDHU-1',  cat:'GEO',      color:'#00d4ff', priority:1},
+    {norad:'41838', name:'GSAT-18',        cat:'GEO',      color:'#00d4ff', priority:2},
+    {norad:'27386', name:'USA-186',        cat:'MIL',      color:'#ff3c3c', priority:1},
+    {norad:'44502', name:'COSMO-4',        cat:'MIL',      color:'#ff3c3c', priority:2},
+    {norad:'48465', name:'YAOGAN-32B',     cat:'MIL',      color:'#ff3c3c', priority:2},
+    {norad:'33591', name:'IRIDIUM-33',     cat:'IRIDIUM',  color:'#00d4ff', priority:2},
+    {norad:'25994', name:'TERRA',          cat:'EO',       color:'#c8ff00', priority:1},
+    {norad:'27424', name:'AQUA',           cat:'EO',       color:'#c8ff00', priority:1},
+    {norad:'07530', name:'OSCAR-7',        cat:'AMATEUR',  color:'#44ffcc', priority:2},
+    {norad:'28654', name:'NOAA-18',        cat:'WEATHER',  color:'#ffe600', priority:1},
+    {norad:'33591', name:'METOP-A',        cat:'WEATHER',  color:'#ffe600', priority:1},
+    {norad:'40069', name:'METEOR-M 2',     cat:'WEATHER',  color:'#ffaa00', priority:2},
   ];
 
-  const CAT_COLORS = {
-    STATION:'#00ff9d', GPS:'#b44fff', GLONASS:'#9944ff', GALILEO:'#aa44ff',
-    BEIDOU:'#cc44ff',  WEATHER:'#ffe600', EO:'#c8ff00',  GEO:'#00d4ff',
-    MIL:'#ff3c3c',     STARLINK:'#00aaff', ONEWEB:'#00bbdd', IRIDIUM:'#00d4ff',
-    AMATEUR:'#44ffcc', ACTIVE:'#44ffcc',
-  };
+  // ── TLE fetch — Ivan proxy primary (has CORS), Celestrak via
+  //   corsproxy.io as fallback (targeted, only for Celestrak) ──
+  const _tleCache = {};
 
-  // ── Fetch position from N2YO API (returns lat/lon/alt directly) ─
-  async function _fetchN2YO(norad, name) {
-    // N2YO /positions endpoint — returns current + next N positions
-    const url = `https://api.n2yo.com/rest/v1/satellite/positions/${norad}/0/0/0/1/&apiKey=${N2YO_KEY}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!res.ok) throw new Error(`N2YO HTTP ${res.status}`);
-    const json = await res.json();
-    if (!json.positions?.length) throw new Error(`N2YO: no positions for ${norad}`);
-    const pos = json.positions[0];
-    if (!isFinite(pos.satlatitude)||!isFinite(pos.satlongitude)||!isFinite(pos.sataltitude))
-      throw new Error(`N2YO: invalid position for ${norad}`);
-    return {
-      lat:   pos.satlatitude,
-      lon:   pos.satlongitude,
-      altKm: pos.sataltitude,
-      altM:  pos.sataltitude * 1000,
-    };
+  async function _fetchTLE(norad) {
+    if (_tleCache[norad] && (Date.now()-_tleCache[norad].ts) < 3_600_000)
+      return _tleCache[norad].tle;
+
+    const sources = [
+      // Ivan Stanojevic proxy — proper CORS headers, reliable
+      async () => {
+        const res = await fetch(`https://tle.ivanstanojevic.me/api/tle/${norad}`,
+                                { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) throw new Error(`Ivan HTTP ${res.status}`);
+        const j = await res.json();
+        if (!j.line1||!j.line2) throw new Error('Ivan: missing TLE lines');
+        return { name: j.name||String(norad), line1: j.line1, line2: j.line2 };
+      },
+      // Celestrak via corsproxy.io — only used if Ivan fails
+      async () => {
+        const target = `https://celestrak.org/satcat/tle.php?CATNR=${norad}`;
+        const url    = `https://corsproxy.io/?${encodeURIComponent(target)}`;
+        const res    = await fetch(url, { signal: AbortSignal.timeout(12000) });
+        if (!res.ok) throw new Error(`Celestrak proxy HTTP ${res.status}`);
+        const text  = await res.text();
+        const lines = text.trim().split('\n').map(l=>l.trim()).filter(Boolean);
+        if (lines.length >= 3) return { name:lines[0], line1:lines[1], line2:lines[2] };
+        if (lines.length === 2 && lines[0].startsWith('1 '))
+          return { name:String(norad), line1:lines[0], line2:lines[1] };
+        throw new Error('Celestrak: bad TLE format');
+      },
+    ];
+
+    for (const src of sources) {
+      try {
+        const tle = await src();
+        _tleCache[norad] = { tle, ts: Date.now() };
+        return tle;
+      } catch(e) { continue; }
+    }
+    throw new Error(`TLE unavailable for NORAD ${norad}`);
   }
 
-  // ── Fallback: ivanstanojevic.me TLE proxy (has CORS headers) ──
-  async function _fetchIvanTLE(norad) {
-    const res = await fetch(`https://tle.ivanstanojevic.me/api/tle/${norad}`,
-                            { signal: AbortSignal.timeout(10000) });
-    if (!res.ok) throw new Error(`Ivan TLE HTTP ${res.status}`);
-    const j = await res.json();
-    if (!j.line1||!j.line2) throw new Error('Ivan TLE: missing lines');
-    return { name: j.name||String(norad), line1: j.line1, line2: j.line2 };
-  }
-
-  // ── SGP4-lite propagator for TLE fallback ─────────────────────
+  // ── SGP4-lite propagator ──────────────────────────────────────
   function _propagate(tle, minutesOffset) {
     try {
       if (!tle?.line2||tle.line2.length<63) return null;
@@ -2692,19 +2689,19 @@ const SATELLITE_MODULE = (() => {
     const mm=parseFloat(tle.line2.substring(52,63));
     if(!isFinite(mm)||mm<=0) return [];
     const period=1440/mm,pts=[];
-    for(let i=0;i<=60;i++){
+    for(let i=0;i<=80;i++){
       try{
-        const pos=_propagate(tle,(i/60)*period);
-        if(pos&&isFinite(pos.lat)&&isFinite(pos.lon)&&isFinite(pos.altM)&&pos.altM>0)
+        const pos=_propagate(tle,(i/80)*period);
+        if(pos&&isFinite(pos.lat)&&isFinite(pos.lon)&&pos.altM>0)
           pts.push(Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM));
       }catch(e){}
     }
     return pts;
   }
 
-  // ── Satellite icon ────────────────────────────────────────────
+  // ── Icons ─────────────────────────────────────────────────────
   const _iconCache = {};
-  function _makeSatIcon(color, cat) {
+  function _makeSatIcon(color,cat) {
     const key=`${color}_${cat}`;
     if(_iconCache[key]) return _iconCache[key];
     const SZ=20,c=document.createElement('canvas');
@@ -2715,11 +2712,10 @@ const SATELLITE_MODULE = (() => {
     if(cat==='STATION'){
       ctx.strokeRect(4,8,12,4);
       ctx.fillRect(1,9,3,2);ctx.fillRect(16,9,3,2);ctx.fillRect(9,4,2,12);
-    }else if(cat==='MIL'||cat==='RADAR'){
+    }else if(cat==='MIL'){
       ctx.beginPath();
       ctx.moveTo(10,2);ctx.lineTo(18,10);ctx.lineTo(10,18);ctx.lineTo(2,10);
-      ctx.closePath();ctx.stroke();
-      ctx.fillStyle=color+'33';ctx.fill();
+      ctx.closePath();ctx.stroke();ctx.fillStyle=color+'33';ctx.fill();
     }else if(['GPS','GLONASS','GALILEO','BEIDOU'].includes(cat)){
       ctx.beginPath();
       for(let i=0;i<6;i++){
@@ -2734,19 +2730,18 @@ const SATELLITE_MODULE = (() => {
       ctx.moveTo(2,10);ctx.lineTo(6,10);ctx.moveTo(14,10);ctx.lineTo(18,10);
       ctx.stroke();
     }
-    _iconCache[key]=c;
-    return c;
+    _iconCache[key]=c; return c;
   }
 
-  const _active = [];
-  let   _ticker = null;
+  const _active=[];
+  let _ticker=null;
 
   function _tick() {
-    _active.forEach(sat => {
-      if (!sat.tle||!sat.entity) return;
+    _active.forEach(sat=>{
+      if(!sat.tle||!sat.entity) return;
       const pos=_propagate(sat.tle,0);
       if(!pos||!isFinite(pos.lat)||!isFinite(pos.lon)||!isFinite(pos.altM)) return;
-      try {
+      try{
         sat.entity.position=Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM);
         if(sat.entity._oeData){
           sat.entity._oeData.lat=pos.lat;
@@ -2754,71 +2749,8 @@ const SATELLITE_MODULE = (() => {
           sat.entity._oeData.altM=pos.altM;
           sat.entity._oeData.altKm=Math.round(pos.altM/1000);
         }
-      } catch(e){}
+      }catch(e){}
     });
-  }
-
-  // ── Render one satellite ──────────────────────────────────────
-  function _renderSat(meta, pos, tle) {
-    const layer=LAYER_REGISTRY.SATELLITE;
-    const icon=_makeSatIcon(meta.color,meta.cat);
-    const sz=meta.priority===1?20:12;
-
-    // Orbital path (priority-1 only, uses TLE)
-    if(meta.priority===1&&tle){
-      const pathPts=_buildOrbitPath(tle);
-      if(pathPts.length>=4){
-        layer.entities.entities.add({
-          polyline:{
-            positions:pathPts, width:1.5,
-            material:new Cesium.PolylineGlowMaterialProperty({
-              glowPower:0.2,
-              color:Cesium.Color.fromCssColorString(meta.color).withAlpha(0.5),
-            }),
-            clampToGround:false, arcType:Cesium.ArcType.NONE,
-          },
-        });
-      }
-    }
-
-    const entity=layer.entities.entities.add({
-      position:Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM),
-      // Point — always visible at any altitude
-      point:{
-        pixelSize:meta.priority===1?7:4,
-        color:Cesium.Color.fromCssColorString(meta.color),
-        outlineColor:Cesium.Color.BLACK, outlineWidth:1,
-        scaleByDistance:new Cesium.NearFarScalar(500_000,1.5,30_000_000,1.0),
-        disableDepthTestDistance:500,
-      },
-      // Billboard — shows when zoomed in
-      billboard:{
-        image:icon, width:sz, height:sz,
-        verticalOrigin:Cesium.VerticalOrigin.CENTER,
-        scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,8_000_000,0.0),
-        disableDepthTestDistance:500,
-      },
-      label:{
-        text:meta.name,
-        font:'9px Share Tech Mono, monospace',
-        fillColor:Cesium.Color.fromCssColorString(meta.color),
-        outlineColor:Cesium.Color.BLACK,outlineWidth:2,
-        style:Cesium.LabelStyle.FILL_AND_OUTLINE,
-        pixelOffset:new Cesium.Cartesian2(0,-14),
-        scaleByDistance:meta.priority===1
-          ?new Cesium.NearFarScalar(500_000,1.0,10_000_000,0.0)
-          :new Cesium.NearFarScalar(500_000,0.8,3_000_000,0.0),
-        disableDepthTestDistance:500,
-        showBackground:meta.priority===1,
-        backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),
-        backgroundPadding:new Cesium.Cartesian2(3,2),
-      },
-    });
-
-    const altKm=Math.round(pos.altM/1000);
-    entity._oeData={...meta,...pos,type:'satellite',classification:meta.cat,altKm};
-    if(tle) _active.push({tle,entity,meta});
-    return entity;
   }
 
   // ── Detail renderer ───────────────────────────────────────────
@@ -2826,11 +2758,13 @@ const SATELLITE_MODULE = (() => {
     const col=d.color||'#44ffcc';
     const altStr=d.altKm?`${d.altKm.toLocaleString()} km`:'—';
     const catBadge={
-      STATION:'🛸 SPACE STATION',STARLINK:'📡 STARLINK',GPS:'🔵 GPS NAV',
-      GLONASS:'🔵 GLONASS',GALILEO:'🔵 GALILEO',BEIDOU:'🔵 BEIDOU',
-      WEATHER:'🌤 WEATHER',EO:'📷 EARTH OBS',MIL:'🔴 MILITARY',
-      GEO:'🌍 GEO',IRIDIUM:'📡 IRIDIUM',AMATEUR:'📻 AMATEUR',
+      STATION:'🛸 SPACE STATION',GPS:'🔵 GPS NAV',GLONASS:'🔵 GLONASS',
+      GALILEO:'🔵 GALILEO',BEIDOU:'🔵 BEIDOU',WEATHER:'🌤 WEATHER',
+      EO:'📷 EARTH OBS',MIL:'🔴 MILITARY',GEO:'🌍 GEO',
+      IRIDIUM:'📡 IRIDIUM',AMATEUR:'📻 AMATEUR',
     }[d.cat]||`🛰 ${d.cat||'SATELLITE'}`;
+    const incStr=d.incDeg?`${d.incDeg}°`:'—';
+    const perStr=d.periodMin?`${d.periodMin} min`:'—';
     return `
       <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
       <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${catBadge}</span>
@@ -2839,82 +2773,119 @@ const SATELLITE_MODULE = (() => {
         <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value" style="color:${col}">${altStr}</div></div>
         <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat!=null?d.lat.toFixed(3)+'°':'—'}</div></div>
         <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon!=null?d.lon.toFixed(3)+'°':'—'}</div></div>
+        <div><div class="dg-cell-label">Inclination</div><div class="dg-cell-value">${incStr}</div></div>
+        <div><div class="dg-cell-label">Period</div><div class="dg-cell-value">${perStr}</div></div>
         <div><div class="dg-cell-label">Category</div><div class="dg-cell-value">${d.cat||'—'}</div></div>
-        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">N2YO + Celestrak TLE</div></div>
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">Celestrak TLE</div></div>
       </div>`;
   };
 
-  // ── Main refresh — staggered N2YO + TLE fallback ──────────────
-  LAYER_REGISTRY.SATELLITE.refresh = async function () {
+  // ── Main refresh — staggered, progressive render ──────────────
+  LAYER_REGISTRY.SATELLITE.refresh = async function() {
     UI.setStatus('satellite','FETCHING','warn');
-    LOG.add(`[SAT] Fetching ${SAT_CATALOG.length} satellites from N2YO...`,'sys');
+    LOG.add(`[SAT] Loading ${SAT_CATALOG.length} satellites (staggered)...`,'sys');
 
     const layer=LAYER_REGISTRY.SATELLITE;
     layer.entities.entities.removeAll();
     _active.length=0;
     if(_ticker){clearInterval(_ticker);_ticker=null;}
 
-    let rendered=0;
+    // Deduplicate NORAD IDs
     const seen=new Set();
+    const unique=SAT_CATALOG.filter(m=>{ if(seen.has(m.norad)) return false; seen.add(m.norad); return true; });
 
-    // Staggered fetch — 400ms between requests to respect N2YO rate limit
-    for(const meta of SAT_CATALOG){
-      if(seen.has(meta.norad)){continue;}
-      seen.add(meta.norad);
-
+    let rendered=0;
+    for(const meta of unique){
       try{
-        // Try N2YO first (live position, no propagation needed)
-        const pos=await _fetchN2YO(meta.norad,meta.name);
+        const tle=await _fetchTLE(meta.norad);
+        const pos=_propagate(tle,0);
+        if(!pos||!isFinite(pos.lat)||!isFinite(pos.lon)||!isFinite(pos.altM)) throw new Error('Bad position');
 
-        // Also fetch TLE for orbital path + dead-reckoning
-        let tle=null;
-        try{ tle=await _fetchIvanTLE(meta.norad); }catch(e){}
+        // Orbital path for priority-1
+        if(meta.priority===1){
+          const pathPts=_buildOrbitPath(tle);
+          if(pathPts.length>=4){
+            layer.entities.entities.add({
+              polyline:{
+                positions:pathPts,width:1.5,
+                material:new Cesium.PolylineGlowMaterialProperty({
+                  glowPower:0.2,
+                  color:Cesium.Color.fromCssColorString(meta.color).withAlpha(0.5),
+                }),
+                clampToGround:false,arcType:Cesium.ArcType.NONE,
+              },
+            });
+          }
+        }
 
-        _renderSat(meta,pos,tle);
+        const icon=_makeSatIcon(meta.color,meta.cat);
+        const sz=meta.priority===1?20:12;
+        const altKm=Math.round(pos.altM/1000);
+        const incDeg=parseFloat(tle.line2.substring(8,16));
+        const mmVal=parseFloat(tle.line2.substring(52,63));
+        const periodMin=isFinite(mmVal)&&mmVal>0?Math.round(1440/mmVal):null;
+
+        const entity=layer.entities.entities.add({
+          position:Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM),
+          // Point — always visible at any zoom level
+          point:{
+            pixelSize:meta.priority===1?7:5,
+            color:Cesium.Color.fromCssColorString(meta.color),
+            outlineColor:Cesium.Color.BLACK,outlineWidth:1,
+            scaleByDistance:new Cesium.NearFarScalar(500_000,1.5,30_000_000,1.0),
+            disableDepthTestDistance:500,
+          },
+          billboard:{
+            image:icon,width:sz,height:sz,
+            verticalOrigin:Cesium.VerticalOrigin.CENTER,
+            scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,8_000_000,0.0),
+            disableDepthTestDistance:500,
+          },
+          label:{
+            text:meta.name,font:'9px Share Tech Mono, monospace',
+            fillColor:Cesium.Color.fromCssColorString(meta.color),
+            outlineColor:Cesium.Color.BLACK,outlineWidth:2,
+            style:Cesium.LabelStyle.FILL_AND_OUTLINE,
+            pixelOffset:new Cesium.Cartesian2(0,-14),
+            scaleByDistance:meta.priority===1
+              ?new Cesium.NearFarScalar(500_000,1.0,10_000_000,0.0)
+              :new Cesium.NearFarScalar(500_000,0.8,3_000_000,0.0),
+            disableDepthTestDistance:500,
+            showBackground:meta.priority===1,
+            backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),
+            backgroundPadding:new Cesium.Cartesian2(3,2),
+          },
+        });
+
+        entity._oeData={...meta,...pos,type:'satellite',classification:meta.cat,
+          altKm,incDeg:isFinite(incDeg)?incDeg.toFixed(2):null,periodMin};
+        _active.push({tle,entity,meta});
         rendered++;
-        LOG.add(`[SAT] ${meta.name} @ ${Math.round(pos.altKm)}km`,'sat');
 
-        // Update status progressively
+        // Progressive status update
         layer.count=rendered;
         LAYER_REGISTRY._sync('SATELLITE');
         document.getElementById('sb-sats').innerHTML=`SATS <span>${rendered}</span>`;
         UI.setStatus('satellite',`LIVE · ${rendered}`,'ok');
+        LOG.add(`[SAT] ✓ ${meta.name} @ ${altKm}km`,'sat');
 
       }catch(e){
-        // N2YO failed — try TLE fallback
-        LOG.add(`[SAT] ${meta.name} N2YO failed (${e.message}) — trying TLE`,'warn');
-        try{
-          const tle=await _fetchIvanTLE(meta.norad);
-          const pos=_propagate(tle,0);
-          if(pos&&isFinite(pos.lat)&&isFinite(pos.lon)&&isFinite(pos.altM)){
-            _renderSat(meta,{...pos,altKm:Math.round(pos.altM/1000)},tle);
-            rendered++;
-            LOG.add(`[SAT] ${meta.name} via TLE fallback`,'sat');
-            layer.count=rendered;
-            LAYER_REGISTRY._sync('SATELLITE');
-            document.getElementById('sb-sats').innerHTML=`SATS <span>${rendered}</span>`;
-          }
-        }catch(e2){
-          LOG.add(`[SAT] ${meta.name} all sources failed`,'warn');
-        }
+        LOG.add(`[SAT] ${meta.name} failed — ${e.message}`,'warn');
       }
-
-      // 400ms stagger between each satellite request
-      await new Promise(r=>setTimeout(r,400));
+      // 500ms stagger — respects rate limits, TLE proxy is fast
+      await new Promise(r=>setTimeout(r,500));
     }
 
     if(rendered===0){
-      LOG.add('[SAT] All satellite fetches failed','alrt');
+      LOG.add('[SAT] All TLE fetches failed','alrt');
       UI.setStatus('satellite','OFFLINE','err');
       return;
     }
-
     _ticker=setInterval(_tick,5000);
-    LOG.add(`[SAT] ${rendered} satellites active — 5s position tick`,'sat');
-    UI.setStatus('satellite',`LIVE · ${rendered}`,'ok');
+    LOG.add(`[SAT] ${rendered} satellites active`,'sat');
   };
 
-  LOG.add('[SAT] v3 module loaded — N2YO authenticated API','sat');
+  LOG.add('[SAT] v3.1 module — Ivan TLE proxy primary','sat');
   UI.setStatus('satellite','LOADING','warn');
   setTimeout(()=>LAYER_REGISTRY.SATELLITE.refresh(),3200);
   return {refresh:()=>LAYER_REGISTRY.SATELLITE.refresh()};
@@ -2930,180 +2901,185 @@ const SATELLITE_MODULE = (() => {
 // ╚══════════════════════════════════════════════════════════════╝
 const ENVIRONMENT_MODULE = (() => {
 
-  // No bbox — FIRMS CSV and RainViewer are both already global
   let _rainLayer = null;
 
-  // ── NASA FIRMS ────────────────────────────────────────────────
-  const FIRMS_URL =
-    'https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_Global_24h.csv';
+  // ── NASA EONET — natural events API (proper CORS headers) ─────
+  // Replaced FIRMS CSV (CORS blocked) with EONET JSON API
+  const EONET_URL = 'https://eonet.gsfc.nasa.gov/api/v3/events?category=wildfires&status=open&limit=500&days=3';
+  // FIRMS via corsproxy as backup
+  const FIRMS_URL = 'https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_Global_24h.csv';
+
+  async function _fetchFiresEONET() {
+    const res = await fetch(EONET_URL, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`EONET HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.events?.length) throw new Error('EONET: no fire events');
+    const fires = [];
+    json.events.forEach(evt => {
+      evt.geometry?.forEach(g => {
+        if (g.type==='Point' && g.coordinates?.length>=2) {
+          fires.push({
+            lon:  g.coordinates[0],
+            lat:  g.coordinates[1],
+            frp:  50,  // EONET doesn't give FRP — use medium intensity
+            conf: 90,
+            date: g.date?.slice(0,10) || '',
+            name: evt.title,
+          });
+        }
+      });
+    });
+    return fires;
+  }
+
+  async function _fetchFirmsFallback() {
+    // Try FIRMS via corsproxy — targeted only for this one blocked source
+    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(FIRMS_URL)}`;
+    const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`FIRMS proxy HTTP ${res.status}`);
+    const csv = await res.text();
+    if (!csv||csv.length<100) throw new Error('FIRMS: empty');
+    const lines=csv.trim().split('\n');
+    const header=lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
+    const iLat=header.indexOf('latitude'),iLon=header.indexOf('longitude');
+    const iConf=header.indexOf('confidence'),iFrp=header.indexOf('frp');
+    const iDate=header.indexOf('acq_date');
+    if(iLat<0||iLon<0) throw new Error('FIRMS: bad CSV format');
+    return lines.slice(1).filter(l=>l.trim()).map(l=>{
+      const c=l.split(',');
+      return {lat:parseFloat(c[iLat]),lon:parseFloat(c[iLon]),
+              conf:iConf>=0?parseFloat(c[iConf])||50:50,
+              frp:iFrp>=0?parseFloat(c[iFrp])||0:0,
+              date:iDate>=0?c[iDate]:''};
+    }).filter(f=>isFinite(f.lat)&&isFinite(f.lon)&&
+               Math.abs(f.lat)<=90&&Math.abs(f.lon)<=180&&f.conf>=60);
+  }
 
   async function _fetchFires() {
-    const res = await fetch(FIRMS_URL, { signal: AbortSignal.timeout(20000) });
-    if (!res.ok) throw new Error(`FIRMS HTTP ${res.status}`);
-    const csv = await res.text();
-    if (!csv || csv.length < 100) throw new Error('FIRMS: empty CSV');
-
-    const lines  = csv.trim().split('\n');
-    const header = lines[0].split(',').map(h => h.trim().replace(/"/g,''));
-    const iLat   = header.indexOf('latitude');
-    const iLon   = header.indexOf('longitude');
-    const iConf  = header.indexOf('confidence');
-    const iFrp   = header.indexOf('frp');
-    const iDate  = header.indexOf('acq_date');
-    if (iLat < 0 || iLon < 0) throw new Error('FIRMS: unexpected CSV format');
-
-    return lines.slice(1).filter(l => l.trim()).map(l => {
-      const c = l.split(',');
-      return {
-        lat:  parseFloat(c[iLat]),
-        lon:  parseFloat(c[iLon]),
-        conf: iConf >= 0 ? (parseFloat(c[iConf]) || 50) : 50,
-        frp:  iFrp  >= 0 ? (parseFloat(c[iFrp])  || 0)  : 0,
-        date: iDate >= 0 ? c[iDate] : '',
-      };
-    }).filter(f =>
-      // Global coverage — filter only for validity + confidence threshold
-      isFinite(f.lat) && isFinite(f.lon) &&
-      f.lat >= -90 && f.lat <= 90 && f.lon >= -180 && f.lon <= 180 &&
-      f.conf >= 60
-    );
+    // Try EONET first (native CORS), fall back to FIRMS via proxy
+    try {
+      const fires = await _fetchFiresEONET();
+      LOG.add(`[FIRMS] EONET: ${fires.length} wildfire events`,'warn');
+      return fires;
+    } catch(e) {
+      LOG.add(`[FIRMS] EONET failed (${e.message}) — trying FIRMS proxy`,'warn');
+      return await _fetchFirmsFallback();
+    }
   }
 
   function _makeFireIcon(frp) {
-    const inten = Math.min((frp || 0) / 80, 1.0);
-    const sz    = Math.round(14 + inten * 14);
-    const c     = document.createElement('canvas');
-    c.width = c.height = sz;
-    const ctx = c.getContext('2d');
-    const cx  = sz / 2;
-    const g   = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
-    g.addColorStop(0,   `rgba(255,120,0,${0.7 + inten*0.25})`);
-    g.addColorStop(0.5, `rgba(255,50,0,${0.4 + inten*0.2})`);
-    g.addColorStop(1,   'rgba(200,0,0,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(cx, cx, cx, 0, Math.PI*2); ctx.fill();
-    ctx.shadowColor = '#ffee00'; ctx.shadowBlur = 8;
-    ctx.fillStyle = '#ffcc00';
-    ctx.beginPath(); ctx.arc(cx, cx, 2 + inten*2, 0, Math.PI*2); ctx.fill();
+    const inten=Math.min((frp||0)/80,1.0);
+    const sz=Math.round(14+inten*14);
+    const c=document.createElement('canvas');
+    c.width=c.height=sz;
+    const ctx=c.getContext('2d');
+    const cx=sz/2;
+    const g=ctx.createRadialGradient(cx,cx,0,cx,cx,cx);
+    g.addColorStop(0,`rgba(255,120,0,${0.7+inten*0.25})`);
+    g.addColorStop(0.5,`rgba(255,50,0,${0.4+inten*0.2})`);
+    g.addColorStop(1,'rgba(200,0,0,0)');
+    ctx.fillStyle=g;
+    ctx.beginPath();ctx.arc(cx,cx,cx,0,Math.PI*2);ctx.fill();
+    ctx.shadowColor='#ffee00';ctx.shadowBlur=8;
+    ctx.fillStyle='#ffcc00';
+    ctx.beginPath();ctx.arc(cx,cx,2+inten*2,0,Math.PI*2);ctx.fill();
     return c;
   }
 
   async function _renderFires(fires) {
-    const layer = LAYER_REGISTRY.ENVIRONMENT;
-    // Remove stale fire entities only
-    const toRemove = layer.entities.entities.values.filter(e => e._oeType === 'fire');
-    toRemove.forEach(e => layer.entities.entities.remove(e));
-
-    // Cap at 2000 hotspots — sort by FRP desc so brightest fires render first
-    const capped = fires.sort((a,b) => (b.frp||0) - (a.frp||0)).slice(0, 2000);
-
-    capped.forEach(f => {
-      const icon   = _makeFireIcon(f.frp);
-      const entity = layer.entities.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, 10),
-        billboard: {
-          image:  icon, width: icon.width, height: icon.height,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          scaleByDistance:       new Cesium.NearFarScalar(5_000, 2.5, 2_000_000, 0.4),
-          translucencyByDistance: new Cesium.NearFarScalar(50_000, 1.0, 3_000_000, 0.15),
-          disableDepthTestDistance: 500,  // depth-test ON beyond 500m — hides behind globe
+    const layer=LAYER_REGISTRY.ENVIRONMENT;
+    const toRemove=layer.entities.entities.values.filter(e=>e._oeType==='fire');
+    toRemove.forEach(e=>layer.entities.entities.remove(e));
+    const capped=fires.sort((a,b)=>(b.frp||0)-(a.frp||0)).slice(0,2000);
+    capped.forEach(f=>{
+      const icon=_makeFireIcon(f.frp);
+      const entity=layer.entities.entities.add({
+        position:Cesium.Cartesian3.fromDegrees(f.lon,f.lat,10),
+        billboard:{
+          image:icon,width:icon.width,height:icon.height,
+          verticalOrigin:Cesium.VerticalOrigin.CENTER,
+          scaleByDistance:new Cesium.NearFarScalar(5_000,2.5,2_000_000,0.4),
+          translucencyByDistance:new Cesium.NearFarScalar(50_000,1.0,3_000_000,0.15),
+          disableDepthTestDistance:500,
         },
       });
-      entity._oeType = 'fire';
-      entity._oeData = { ...f, type:'fire', name:'THERMAL HOTSPOT', classification:'FIRE' };
+      entity._oeType='fire';
+      entity._oeData={...f,type:'fire',name:f.name||'THERMAL HOTSPOT',classification:'FIRE'};
     });
-
-    layer.count = capped.length;
+    layer.count=capped.length;
     LAYER_REGISTRY._sync('ENVIRONMENT');
-    UI.setStatus('fires', `LIVE \xb7 ${capped.length}`, 'ok');
-    document.getElementById('sb-fires').innerHTML = `FIRES <span>${capped.length}</span>`;
-    LOG.add(`[FIRMS] ${capped.length} hotspots plotted globally (${fires.length} total detected)`, 'warn');
-    if (fires.length > 200)
-      LOG.add(`[FIRMS] HIGH GLOBAL FIRE ACTIVITY \u2014 ${fires.length} active detections`, 'alrt');
+    UI.setStatus('fires',`LIVE · ${capped.length}`,'ok');
+    document.getElementById('sb-fires').innerHTML=`FIRES <span>${capped.length}</span>`;
+    LOG.add(`[FIRMS] ${capped.length} fire hotspots plotted`,'warn');
   }
 
-  // ── RainViewer Radar ─────────────────────────────────────────
+  // ── RainViewer — JSON API has CORS, tile URLs are direct ─────
   async function _loadWeather() {
-    UI.setStatus('weather', 'FETCHING', 'warn');
+    UI.setStatus('weather','FETCHING','warn');
     try {
-      const apiRes  = await fetch('https://api.rainviewer.com/public/weather-maps.json',
-                               { signal: AbortSignal.timeout(8000) });
-      if (!apiRes.ok) throw new Error(`RainViewer HTTP ${apiRes.status}`);
-      const data    = await apiRes.json();
-      const frames  = data.radar?.past;
-      if (!frames?.length) throw new Error('RainViewer: no radar frames');
-
-      const latest = frames[frames.length - 1];
-      const host   = data.host;
-
-      if (_rainLayer) {
-        scene.imageryLayers.remove(_rainLayer, true);
-        _rainLayer = null;
-      }
-
-      const provider = new Cesium.UrlTemplateImageryProvider({
-        url:          `${host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`,
-        minimumLevel: 1,
-        maximumLevel: 6,
-        credit:       'RainViewer.com',
+      // RainViewer's JSON API endpoint has proper CORS headers
+      const res = await fetch('https://api.rainviewer.com/public/weather-maps.json',
+                              { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`RainViewer HTTP ${res.status}`);
+      const data=await res.json();
+      const frames=data.radar?.past;
+      if (!frames?.length) throw new Error('RainViewer: no frames');
+      const latest=frames[frames.length-1];
+      const host=data.host;
+      if(_rainLayer){scene.imageryLayers.remove(_rainLayer,true);_rainLayer=null;}
+      const provider=new Cesium.UrlTemplateImageryProvider({
+        url:`${host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`,
+        minimumLevel:1,maximumLevel:6,credit:'RainViewer.com',
       });
-      _rainLayer             = scene.imageryLayers.addImageryProvider(provider);
-      _rainLayer.alpha       = 0.45;
-      _rainLayer.show        = LAYER_REGISTRY.ENVIRONMENT.enabled;
-      _rainLayer.brightness  = 1.4;
-      _rainLayer.saturation  = 1.2;
-
-      const ts = new Date(latest.time * 1000).toISOString().slice(11,16);
-      UI.setStatus('weather', `LIVE \xb7 ${ts}Z`, 'ok');
-      LOG.add(`[WEATHER] RainViewer radar loaded \u2014 ${ts}Z frame`, 'sys');
-    } catch(e) {
-      LOG.add(`[WEATHER] RainViewer failed \u2014 ${e.message}`, 'warn');
-      UI.setStatus('weather', 'OFFLINE', 'err');
+      _rainLayer=scene.imageryLayers.addImageryProvider(provider);
+      _rainLayer.alpha=0.45;
+      _rainLayer.show=LAYER_REGISTRY.ENVIRONMENT.enabled;
+      _rainLayer.brightness=1.4;_rainLayer.saturation=1.2;
+      const ts=new Date(latest.time*1000).toISOString().slice(11,16);
+      UI.setStatus('weather',`LIVE · ${ts}Z`,'ok');
+      LOG.add(`[WEATHER] RainViewer radar loaded — ${ts}Z`,'sys');
+    }catch(e){
+      LOG.add(`[WEATHER] RainViewer failed — ${e.message}`,'warn');
+      UI.setStatus('weather','OFFLINE','err');
     }
   }
 
-  // ── Detail renderer for fire hotspots ────────────────────────
   DETAIL_RENDERERS['fire'] = (d) => `
-    <div class="detail-name" style="color:var(--orange)">\ud83d\udd25 THERMAL HOTSPOT</div>
+    <div class="detail-name" style="color:var(--orange)">🔥 ${d.name||'THERMAL HOTSPOT'}</div>
     <span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,100,0,0.4);background:rgba(255,100,0,0.08)">
-      \u26a0 ACTIVE FIRE \u2014 NASA VIIRS
+      ⚠ ACTIVE FIRE — NASA
     </span>
     <div class="detail-grid" style="margin-top:6px">
-      <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat?.toFixed(4)}\xb0</div></div>
-      <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon?.toFixed(4)}\xb0</div></div>
-      <div><div class="dg-cell-label">FRP (Power)</div><div class="dg-cell-value">${d.frp ? d.frp.toFixed(1)+' MW' : '\u2014'}</div></div>
-      <div><div class="dg-cell-label">Confidence</div><div class="dg-cell-value">${d.conf ? d.conf+'%' : '\u2014'}</div></div>
-      <div><div class="dg-cell-label">Detected</div><div class="dg-cell-value">${d.date || '\u2014'}</div></div>
-      <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">NASA FIRMS VIIRS</div></div>
+      <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat?.toFixed(4)}°</div></div>
+      <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon?.toFixed(4)}°</div></div>
+      <div><div class="dg-cell-label">FRP</div><div class="dg-cell-value">${d.frp?d.frp.toFixed(1)+' MW':'—'}</div></div>
+      <div><div class="dg-cell-label">Confidence</div><div class="dg-cell-value">${d.conf?d.conf+'%':'—'}</div></div>
+      <div><div class="dg-cell-label">Detected</div><div class="dg-cell-value">${d.date||'—'}</div></div>
+      <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">NASA EONET / FIRMS</div></div>
     </div>`;
 
-  // Hook LAYER_REGISTRY.toggle to sync rain layer visibility
-  const _origToggle = LAYER_REGISTRY.toggle.bind(LAYER_REGISTRY);
-  LAYER_REGISTRY.toggle = function(id) {
+  const _origToggle=LAYER_REGISTRY.toggle.bind(LAYER_REGISTRY);
+  LAYER_REGISTRY.toggle=function(id){
     _origToggle(id);
-    if (id === 'ENVIRONMENT' && _rainLayer)
-      _rainLayer.show = this.ENVIRONMENT.enabled;
+    if(id==='ENVIRONMENT'&&_rainLayer) _rainLayer.show=this.ENVIRONMENT.enabled;
   };
 
-  // ── Main refresh ──────────────────────────────────────────────
-  LAYER_REGISTRY.ENVIRONMENT.refresh = async function () {
-    LOG.add('[ENV] Polling NASA FIRMS + RainViewer...', 'sys');
-    const [fireResult] = await Promise.allSettled([
-      _fetchFires().then(_renderFires),
+  LAYER_REGISTRY.ENVIRONMENT.refresh = async function() {
+    LOG.add('[ENV] Polling NASA EONET + RainViewer...','sys');
+    await Promise.allSettled([
+      _fetchFires().then(_renderFires).catch(e=>{
+        LOG.add(`[FIRMS] Failed — ${e.message}`,'warn');
+        UI.setStatus('fires','OFFLINE','err');
+      }),
       _loadWeather(),
     ]);
-    if (fireResult.status === 'rejected') {
-      LOG.add(`[FIRMS] Fire data failed \u2014 ${fireResult.reason?.message}`, 'warn');
-      UI.setStatus('fires', 'OFFLINE', 'err');
-    }
   };
 
-  LOG.add('[ENV] Environment module loaded', 'sys');
-  UI.setStatus('fires',   'LOADING', 'warn');
-  UI.setStatus('weather', 'LOADING', 'warn');
-  setTimeout(() => LAYER_REGISTRY.ENVIRONMENT.refresh(), 4800);
-
-  return { refresh: () => LAYER_REGISTRY.ENVIRONMENT.refresh() };
+  LOG.add('[ENV] v3.1 module — EONET fires + RainViewer','sys');
+  UI.setStatus('fires','LOADING','warn');
+  UI.setStatus('weather','LOADING','warn');
+  setTimeout(()=>LAYER_REGISTRY.ENVIRONMENT.refresh(),4800);
+  return {refresh:()=>LAYER_REGISTRY.ENVIRONMENT.refresh()};
 
 })(); // END ENVIRONMENT_MODULE
 

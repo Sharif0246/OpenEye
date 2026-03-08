@@ -6,6 +6,7 @@
 <title>OpenEye // Tactical Intelligence Platform</title>
 
 <script src="https://cesium.com/downloads/cesiumjs/releases/1.116/Build/Cesium/Cesium.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.1.4/satellite.min.js"></script>
 <link  href="https://cesium.com/downloads/cesiumjs/releases/1.116/Build/Cesium/Widgets/widgets.css" rel="stylesheet"/>
 <link  href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@700;900&display=swap" rel="stylesheet"/>
 
@@ -1807,31 +1808,14 @@ const NAV_CONTROLLER = (() => {
 })();
 
 
-
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  AVIATION_MODULE  —  v3  LIVE AUTHENTICATED                 ║
-// ║  Primary : ADS-B Exchange via RapidAPI (global, rich data)  ║
-// ║  Fallback: OpenSky Network (authenticated, 4000 credits)    ║
-// ║  Military: ADS-B Exchange /military endpoint                 ║
+// ║  AVIATION_MODULE  —  v4  OPENSKY WEBSOCKET                  ║
+// ║  Primary : OpenSky Network WebSocket (wss://)               ║
+// ║  Fallback: OpenSky REST API (CORS-safe, same origin rules)  ║
+// ║  No proxies. No ADS-B Exchange. Pure WebSocket/REST.        ║
 // ╚══════════════════════════════════════════════════════════════╝
 const AVIATION_MODULE = (() => {
 
-  // ── API Keys ─────────────────────────────────────────────────
-  const RAPIDAPI_KEY  = '70603dc003msh9b3a27ff6cf425ap1453e0jsn51f9f2226e66';
-  const ADSBX_HOST    = 'adsbexchange-com1.p.rapidapi.com';
-  const OPENSKY_USER  = 'sharifopeneye';
-  const OPENSKY_PASS  = '';  // credential-less still gives higher rate limits
-
-  // RapidAPI endpoints — these send proper CORS headers
-  const URL_ADSBX_ALL = 'https://adsbexchange-com1.p.rapidapi.com/v2/lat/0/lon/0/dist/99999/';
-  const URL_ADSBX_MIL = 'https://adsbexchange-com1.p.rapidapi.com/v2/mil/';
-
-  const RAPIDAPI_HEADERS = {
-    'x-rapidapi-key':  RAPIDAPI_KEY,
-    'x-rapidapi-host': ADSBX_HOST,
-  };
-
-  // ── Expanded military classification ─────────────────────────
   const MIL_PREFIXES = [
     'RCH','CNV','REACH','KNIFE','EVAC','JAKE','USAF','NAVY','ARMY','VENUS',
     'IRON','DUKE','HAWK','EAGLE','VIPER','CHAOS','SPAR','SAM','GTMO','HOMER',
@@ -1840,7 +1824,7 @@ const AVIATION_MODULE = (() => {
     'LANCE','LION','LYNX','MAGIC','MYSTIC','NINJA','NOBLE','TALON','TIGER',
     'TITAN','TORCH','TUSK','VALOR','VIKING','VOODOO','VULCAN','WEDGE',
     'NATO','RFR','RFF','RFA','MMF','MRF','TOPCAT','TRIDENT','SWIFT',
-    'PAF','BAF','IAF','SLAF','MAF','RNZAF','RAAF','RAF ',
+    'PAF','BAF','IAF','SLAF','MAF','RNZAF','RAAF','RAF',
     'VVAF','RTAF','ROKAF','JASDF','PLAAF','PLANAF','ASY','EXEC',
   ];
   const MIL_HEX = [
@@ -1851,395 +1835,326 @@ const AVIATION_MODULE = (() => {
   ];
 
   function _classify(f) {
-    if (f._fromMil) return 'MILITARY';
-    const cs  = (f.callsign || '').trim().toUpperCase();
-    const hex = (f.icao24   || '').toLowerCase();
-    if (!cs || /^[0-9A-F]{4,8}$/.test(cs)) return 'MILITARY';
-    if (MIL_PREFIXES.some(p => cs.startsWith(p.trim()))) return 'MILITARY';
-    if (MIL_HEX.some(p => hex.startsWith(p)))            return 'MILITARY';
+    const cs  = (f.callsign||'').trim().toUpperCase();
+    const hex = (f.icao24||'').toLowerCase();
+    if (!cs||/^[0-9A-F]{4,8}$/.test(cs)) return 'MILITARY';
+    if (MIL_PREFIXES.some(p=>cs.startsWith(p.trim()))) return 'MILITARY';
+    if (MIL_HEX.some(p=>hex.startsWith(p))) return 'MILITARY';
     return 'COMMERCIAL';
   }
 
-  // ── Aircraft icon — proper silhouette ────────────────────────
+  const _iconCache = {};
   function _makeIcon(type, heading) {
-    const SZ = 40;
-    const c  = document.createElement('canvas');
-    c.width  = c.height = SZ;
-    const ctx = c.getContext('2d');
-    const col  = type === 'MILITARY' ? '#ff9900' : '#00ff9d';
-    const glow = type === 'MILITARY' ? '#ff6600' : '#00cc77';
-    ctx.save();
-    ctx.translate(SZ/2, SZ/2);
-    ctx.rotate((heading || 0) * Math.PI / 180);
-    ctx.shadowColor = glow; ctx.shadowBlur = type === 'MILITARY' ? 16 : 10;
-    ctx.fillStyle = col;
-    if (type === 'MILITARY') {
+    const SZ=40, c=document.createElement('canvas');
+    c.width=c.height=SZ;
+    const ctx=c.getContext('2d');
+    const col=type==='MILITARY'?'#ff9900':'#00ff9d';
+    const glow=type==='MILITARY'?'#ff6600':'#00cc77';
+    ctx.save();ctx.translate(SZ/2,SZ/2);
+    ctx.rotate((heading||0)*Math.PI/180);
+    ctx.shadowColor=glow;ctx.shadowBlur=type==='MILITARY'?16:10;
+    ctx.fillStyle=col;
+    if (type==='MILITARY') {
       ctx.beginPath();
-      ctx.moveTo(0,-13); ctx.lineTo(10,6); ctx.lineTo(4,4);
-      ctx.lineTo(3,10);  ctx.lineTo(0,8);  ctx.lineTo(-3,10);
-      ctx.lineTo(-4,4);  ctx.lineTo(-10,6); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#ffffff88';
-      ctx.beginPath(); ctx.arc(0,-6,1.8,0,Math.PI*2); ctx.fill();
+      ctx.moveTo(0,-13);ctx.lineTo(10,6);ctx.lineTo(4,4);
+      ctx.lineTo(3,10);ctx.lineTo(0,8);ctx.lineTo(-3,10);
+      ctx.lineTo(-4,4);ctx.lineTo(-10,6);ctx.closePath();ctx.fill();
+      ctx.fillStyle='#ffffff88';ctx.beginPath();ctx.arc(0,-6,1.8,0,Math.PI*2);ctx.fill();
     } else {
       ctx.beginPath();
-      ctx.moveTo(0,-14);  ctx.lineTo(2,-6);   ctx.lineTo(11,1);
-      ctx.lineTo(4,4);    ctx.lineTo(3,8);    ctx.lineTo(1,7);
-      ctx.lineTo(0,10);   ctx.lineTo(-1,7);   ctx.lineTo(-3,8);
-      ctx.lineTo(-4,4);   ctx.lineTo(-11,1);  ctx.lineTo(-2,-6);
-      ctx.closePath(); ctx.fill();
+      ctx.moveTo(0,-14);ctx.lineTo(2,-6);ctx.lineTo(11,1);
+      ctx.lineTo(4,4);ctx.lineTo(3,8);ctx.lineTo(1,7);
+      ctx.lineTo(0,10);ctx.lineTo(-1,7);ctx.lineTo(-3,8);
+      ctx.lineTo(-4,4);ctx.lineTo(-11,1);ctx.lineTo(-2,-6);
+      ctx.closePath();ctx.fill();
     }
-    ctx.restore();
-    return c;
+    ctx.restore();return c;
+  }
+  function _getIcon(type,heading){
+    const b=Math.round((heading||0)/5)*5,k=`${type}_${b}`;
+    if(!_iconCache[k])_iconCache[k]=_makeIcon(type,b);return _iconCache[k];
   }
 
-  const _iconCache = {};
-  function _getIcon(type, heading) {
-    const bucket = Math.round((heading||0)/5)*5;
-    const key = `${type}_${bucket}`;
-    if (!_iconCache[key]) _iconCache[key] = _makeIcon(type, bucket);
-    return _iconCache[key];
+  // OpenSky state vector parser
+  // Format: [icao24, callsign, origin_country, time_position, last_contact,
+  //          longitude, latitude, baro_altitude, on_ground, velocity,
+  //          true_track, vertical_rate, sensors, geo_altitude, squawk, spi, position_source]
+  function _parseState(s) {
+    const lon=s[5],lat=s[6];
+    if (lon==null||lat==null||!isFinite(lon)||!isFinite(lat)) return null;
+    if (Math.abs(lat)>90||Math.abs(lon)>180) return null;
+    if (s[8]) return null; // on ground
+    const altM=s[7]!=null?s[7]:(s[13]!=null?s[13]:null);
+    if (altM==null||altM<=0) return null;
+    return {
+      icao24:   (s[0]||'').toLowerCase(),
+      callsign: (s[1]||'').trim(),
+      country:  s[2]||'?',
+      lon,lat,
+      altM:     Math.max(altM,300),
+      altFt:    Math.round((altM||300)*3.28084),
+      velocity: s[9]!=null?Math.round(s[9]*3.6):null,
+      heading:  s[10]||0,
+      vrate:    s[11]!=null?Math.round(s[11]):null,
+      squawk:   s[14]||null,
+      source:   'OpenSky',
+      ts:       Date.now(),
+    };
   }
 
-  // ── Dead-reckoning ────────────────────────────────────────────
-  const _drState = new Map();
-  let   _drTimer = null;
+  const _flights = new Map();
+  let _ws=null, _renderTimer=null, _drTimer=null, _restTimer=null;
+  const _milAlerted=new Set();
 
-  function _drUpdate() {
-    const now = Date.now();
-    _drState.forEach((st, id) => {
-      if (!st.velocity || st.velocity < 10) return;
-      const entity = LAYER_REGISTRY.AVIATION.entities.entities.getById(id);
-      if (!entity) return;
-      const dt = (now - st.lastTick) / 1000; st.lastTick = now;
-      const spdMs = st.velocity / 3.6;
-      const distM = spdMs * dt;
-      const R = 6371000;
-      const hdgRad = st.heading * Math.PI / 180;
-      const latRad = st.lat * Math.PI / 180;
-      st.lat += (distM/R)*(180/Math.PI)*Math.cos(hdgRad);
-      st.lon += (distM/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
-      st.lat = Math.max(-85, Math.min(85, st.lat));
-      st.lon = ((st.lon+540)%360)-180;
-      if (!isFinite(st.lat)||!isFinite(st.lon)) return;
+  // ── REST poll — OpenSky has CORS headers, works from GitHub Pages ─
+  async function _restPoll() {
+    try {
+      LOG.add('[AVIATION] OpenSky REST poll...','sys');
+      const res=await fetch('https://opensky-network.org/api/states/all',
+                            {signal:AbortSignal.timeout(25000)});
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json=await res.json();
+      if (!json.states?.length) throw new Error('empty');
+      let n=0;
+      json.states.forEach(s=>{
+        const f=_parseState(s);
+        if (!f) return;
+        f.classification=_classify(f);
+        const key=f.icao24||`anon_${Math.random()}`;
+        _flights.set(key,{...f,_key:key});
+        n++;
+      });
+      LOG.add(`[AVIATION] OpenSky: ${n} flights received`,'sig');
+      _render();
+    } catch(e) {
+      LOG.add(`[AVIATION] REST poll failed — ${e.message}`,'warn');
+    }
+  }
+
+  function _startREST() {
+    if (_restTimer) return;
+    _restPoll();
+    // OpenSky free tier: 1 request per 10s for anonymous, 1 per 5s with account
+    // Use 60s to be safe and not get rate-limited
+    _restTimer=setInterval(_restPoll,60000);
+  }
+
+  // ── WebSocket — bypasses CORS entirely ────────────────────────
+  function _connectWS() {
+    if (_ws&&(_ws.readyState===WebSocket.OPEN||_ws.readyState===WebSocket.CONNECTING)) return;
+    LOG.add('[AVIATION] Connecting OpenSky WebSocket...','sys');
+    UI.setStatus('aviation','CONNECTING','warn');
+    try {
+      _ws=new WebSocket('wss://opensky-network.org/');
+    } catch(e) {
+      LOG.add('[AVIATION] WebSocket unavailable — using REST','warn');
+      _startREST(); return;
+    }
+    _ws.onopen=()=>{
+      LOG.add('[AVIATION] OpenSky WebSocket open','sig');
+      UI.setStatus('aviation','STREAMING','ok');
+    };
+    _ws.onmessage=(evt)=>{
       try {
-        const altM = Math.max((st.alt||1000)*0.3048, 500);
-        entity.position = Cesium.Cartesian3.fromDegrees(st.lon, st.lat, altM);
-        if (entity._oeData) { entity._oeData.lat=st.lat; entity._oeData.lon=st.lon; }
-      } catch(e) {}
-    });
-  }
-  function _startDR() {
-    if (_drTimer) clearInterval(_drTimer);
-    _drTimer = setInterval(_drUpdate, 1000);
-  }
-
-  // ── Fetch: ADS-B Exchange via RapidAPI (CORS-safe, authenticated) ──
-  async function _fetchADSBX() {
-    LOG.add('[AVIATION] Querying ADS-B Exchange (RapidAPI)...', 'sys');
-    const res = await fetch(URL_ADSBX_ALL, {
-      headers: RAPIDAPI_HEADERS,
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) throw new Error(`ADS-B Exchange HTTP ${res.status}`);
-    const json = await res.json();
-    if (!json.ac?.length) throw new Error('ADS-B Exchange: no aircraft');
-    LOG.add(`[AVIATION] ADS-B Exchange: ${json.ac.length} raw contacts`, 'sig');
-    return json.ac
-      .filter(a => a.lat!=null && a.lon!=null && a.alt_baro!=='ground')
-      .map(a => ({
-        source:   'ADS-B Exchange',
-        icao24:   (a.hex||'').toLowerCase(),
-        callsign: (a.flight||a.hex||'').trim(),
-        country:  a.r || a.ownOp || '?',
-        lon: parseFloat(a.lon), lat: parseFloat(a.lat),
-        altitude: typeof a.alt_baro==='number' ? a.alt_baro
-                : typeof a.alt_geom==='number' ? a.alt_geom : 1000,
-        velocity: a.gs!=null ? Math.round(a.gs*1.852) : null,
-        heading:  a.track || a.true_heading || 0,
-        vrate:    a.baro_rate!=null ? Math.round(a.baro_rate*0.00508) : null,
-        squawk:   a.squawk || null,
-        acType:   a.t || null, reg: a.r || null,
-        onGround: a.alt_baro==='ground' || !!Number(a.ground),
-        _fromMil: false,
-      }));
+        const d=JSON.parse(evt.data);
+        const states=d.states||(Array.isArray(d)?d:null);
+        if (!states) return;
+        states.forEach(s=>{
+          const f=_parseState(s);if (!f) return;
+          f.classification=_classify(f);
+          const key=f.icao24||`anon_${Math.random()}`;
+          _flights.set(key,{...f,_key:key});
+        });
+      } catch(e){}
+    };
+    _ws.onerror=()=>{
+      LOG.add('[AVIATION] WebSocket error — switching to REST','warn');
+      _ws=null; _startREST();
+    };
+    _ws.onclose=()=>{
+      LOG.add('[AVIATION] WebSocket closed — reconnecting 30s','warn');
+      UI.setStatus('aviation','RECONNECTING','warn');
+      _ws=null; setTimeout(_connectWS,30000);
+    };
   }
 
-  // ── Fetch: ADS-B Exchange military endpoint ───────────────────
-  async function _fetchADSBXMil() {
-    const res = await fetch(URL_ADSBX_MIL, {
-      headers: RAPIDAPI_HEADERS,
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) throw new Error(`ADS-B Exchange MIL HTTP ${res.status}`);
-    const json = await res.json();
-    if (!json.ac?.length) throw new Error('ADS-B Exchange MIL: empty');
-    return json.ac
-      .filter(a => a.lat!=null && a.lon!=null && a.alt_baro!=='ground')
-      .map(a => ({
-        source:   'ADS-B Exchange/MIL',
-        icao24:   (a.hex||'').toLowerCase(),
-        callsign: (a.flight||a.hex||'').trim(),
-        country:  a.r || a.ownOp || '?',
-        lon: parseFloat(a.lon), lat: parseFloat(a.lat),
-        altitude: typeof a.alt_baro==='number' ? a.alt_baro
-                : typeof a.alt_geom==='number' ? a.alt_geom : 1000,
-        velocity: a.gs!=null ? Math.round(a.gs*1.852) : null,
-        heading:  a.track || a.true_heading || 0,
-        vrate:    a.baro_rate!=null ? Math.round(a.baro_rate*0.00508) : null,
-        squawk:   a.squawk || null,
-        acType:   a.t || null, reg: a.r || null,
-        onGround: false, _fromMil: true,
-      }));
-  }
-
-  // ── Fetch: OpenSky fallback (no auth needed for basic access) ─
-  async function _fetchOpenSky() {
-    const res = await fetch('https://opensky-network.org/api/states/all',
-                            { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`OpenSky HTTP ${res.status}`);
-    const json = await res.json();
-    if (!json.states?.length) throw new Error('OpenSky: empty');
-    return json.states
-      .filter(s => s[5]!=null && s[6]!=null && !s[8])
-      .map(s => ({
-        source:   'OpenSky',
-        icao24:   s[0]||'', callsign: (s[1]||'').trim(),
-        country:  s[2]||'?',
-        lon: s[5], lat: s[6],
-        altitude: s[7]||s[13]||1000,
-        velocity: s[9]!=null ? Math.round(s[9]*3.6) : null,
-        heading:  s[10]||0,
-        vrate:    s[11]!=null ? Math.round(s[11]) : null,
-        squawk:   s[14]||null, onGround: false, _fromMil: false,
-      }));
-  }
-
-  function _merge(lists) {
-    const map = new Map();
-    for (const list of lists)
-      list.forEach(f => {
-        const key = f.icao24.toLowerCase() || Math.random().toString(36);
-        if (!map.has(key) || f._fromMil || f.source.startsWith('ADS-B'))
-          map.set(key, f);
-      });
-    return Array.from(map.values());
-  }
-
-  // ── Render ────────────────────────────────────────────────────
-  function _render(flights) {
-    const layer = LAYER_REGISTRY.AVIATION;
-    layer.entities.entities.removeAll();
-    let milCount = 0;
-    const feedItems = [];
-
-    flights.forEach(f => {
-      const cls = _classify(f);
-      f.classification = cls;
-      if (cls === 'MILITARY') {
-        milCount++;
-        LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country} · ${f.acType||'?'}`, 'warn');
+  // ── Dead-reckoning 1s smooth movement ─────────────────────────
+  function _drUpdate() {
+    const now=Date.now();
+    _flights.forEach((f,key)=>{
+      if (!f.velocity||f.velocity<50) return;
+      if ((now-f.ts)>300000){_flights.delete(key);return;} // prune >5min stale
+      const spdMs=f.velocity/3.6;
+      const distM=spdMs*1;
+      const R=6371000;
+      const hdgRad=(f.heading||0)*Math.PI/180;
+      const latRad=f.lat*Math.PI/180;
+      f.lat+=(distM/R)*(180/Math.PI)*Math.cos(hdgRad);
+      f.lon+=(distM/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
+      f.lat=Math.max(-89.9,Math.min(89.9,f.lat));
+      f.lon=((f.lon+540)%360)-180;
+      const entity=LAYER_REGISTRY.AVIATION.entities.entities.getById(key);
+      if (entity&&isFinite(f.lat)&&isFinite(f.lon)) {
+        try {
+          entity.position=Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM);
+          if(entity._oeData){entity._oeData.lat=f.lat;entity._oeData.lon=f.lon;}
+        } catch(e){}
       }
-      const altFt = f.source==='OpenSky' ? (f.altitude||500)*3.28084 : (f.altitude||500);
-      const altM  = Math.max(f.source==='OpenSky' ? (f.altitude||500) : (f.altitude||500)*0.3048, 300);
-      const flStr = `FL${Math.round(altFt/100).toString().padStart(3,'0')}`;
-      const col   = cls==='MILITARY' ? '#ff9900' : '#00ff9d';
-      const icon  = _getIcon(cls, f.heading);
-      if (!isFinite(f.lat)||!isFinite(f.lon)) return;
+    });
+  }
 
-      const entity = layer.entities.entities.add({
-        id: f.icao24||undefined,
-        position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, altM),
-        billboard: {
-          image: icon, width: cls==='MILITARY'?32:28, height: cls==='MILITARY'?32:28,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          scaleByDistance: new Cesium.NearFarScalar(80_000,1.4,8_000_000,0.25),
-          translucencyByDistance: new Cesium.NearFarScalar(100_000,1.0,12_000_000,0.4),
-          disableDepthTestDistance: 500,
-        },
-        polyline: {
-          positions: Cesium.Cartesian3.fromDegreesArrayHeights([f.lon,f.lat,0,f.lon,f.lat,altM]),
-          width: 1,
-          material: new Cesium.PolylineDashMaterialProperty({
-            color: Cesium.Color.fromCssColorString(col).withAlpha(0.15), dashLength: 12,
-          }),
-          clampToGround: false,
-        },
-        label: {
-          text: f.callsign||f.icao24.toUpperCase(),
-          font: '11px Share Tech Mono, monospace',
-          fillColor: Cesium.Color.fromCssColorString(col),
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset: new Cesium.Cartesian2(0,-22),
-          scaleByDistance: new Cesium.NearFarScalar(80_000,1.0,2_500_000,0.0),
-          disableDepthTestDistance: 500,
-          showBackground: true,
-          backgroundColor: Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
-          backgroundPadding: new Cesium.Cartesian2(4,2),
-        },
-      });
+  // ── Render — full upsert (10s cycle) ─────────────────────────
+  function _render() {
+    const layer=LAYER_REGISTRY.AVIATION;
+    const existing=new Set();
+    let milCount=0;
+    const feedItems=[];
 
-      entity._oeData = { ...f, type:'flight', altM, flStr };
-      _drState.set((f.icao24||'').toLowerCase()||f.callsign, {
-        lat:f.lat, lon:f.lon, alt:f.altitude||1000,
-        heading:f.heading||0, velocity:f.velocity||0, lastTick:Date.now(),
-      });
+    _flights.forEach((f,key)=>{
+      if(!isFinite(f.lat)||!isFinite(f.lon)) return;
+      existing.add(key);
+      const cls=f.classification||_classify(f);
+      f.classification=cls;
+      const col=cls==='MILITARY'?'#ff9900':'#00ff9d';
+      const icon=_getIcon(cls,f.heading);
+      const flStr=`FL${Math.round((f.altFt||0)/100).toString().padStart(3,'0')}`;
+      f.flStr=flStr;
+
+      if (cls==='MILITARY'&&!_milAlerted.has(key)){
+        _milAlerted.add(key);milCount++;
+        LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country}`,'warn');
+      }
+
+      let entity=layer.entities.entities.getById(key);
+      if (!entity) {
+        entity=layer.entities.entities.add({
+          id:key,
+          position:Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM),
+          billboard:{
+            image:icon,width:cls==='MILITARY'?32:26,height:cls==='MILITARY'?32:26,
+            verticalOrigin:Cesium.VerticalOrigin.CENTER,
+            scaleByDistance:new Cesium.NearFarScalar(80_000,1.4,8_000_000,0.25),
+            translucencyByDistance:new Cesium.NearFarScalar(100_000,1.0,12_000_000,0.4),
+            disableDepthTestDistance:500,
+          },
+          label:{
+            text:f.callsign||f.icao24.toUpperCase(),
+            font:'11px Share Tech Mono, monospace',
+            fillColor:Cesium.Color.fromCssColorString(col),
+            outlineColor:Cesium.Color.BLACK,outlineWidth:2,
+            style:Cesium.LabelStyle.FILL_AND_OUTLINE,
+            pixelOffset:new Cesium.Cartesian2(0,-22),
+            scaleByDistance:new Cesium.NearFarScalar(80_000,1.0,2_500_000,0.0),
+            disableDepthTestDistance:500,
+            showBackground:true,
+            backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
+            backgroundPadding:new Cesium.Cartesian2(4,2),
+          },
+        });
+      } else {
+        entity.position=Cesium.Cartesian3.fromDegrees(f.lon,f.lat,f.altM);
+        entity.billboard.image=icon;
+      }
+      entity._oeData={...f,type:'flight',altM:f.altM,flStr};
       feedItems.push({
-        type:'flight', name:f.callsign||f.icao24.toUpperCase(),
+        type:'flight',name:f.callsign||f.icao24.toUpperCase(),
         sub:`${f.country} · ${flStr} · ${f.velocity!=null?f.velocity+'km/h':'?'}`,
-        color:col, tag:cls==='MILITARY'?'tag-mil':'tag-air',
+        color:col,tag:cls==='MILITARY'?'tag-mil':'tag-air',
         tagLabel:cls==='MILITARY'?'MIL':'CIV',
-        lat:f.lat, lon:f.lon, feedAlt:Math.max(altM*1.5,150_000),
+        lat:f.lat,lon:f.lon,feedAlt:Math.max(f.altM*1.5,150_000),
       });
     });
 
-    const activeHex = new Set(flights.map(f=>(f.icao24||'').toLowerCase()));
-    for (const key of _drState.keys()) { if(!activeHex.has(key)) _drState.delete(key); }
-    _startDR();
-    layer.count = flights.length;
+    // Remove stale entities
+    [...layer.entities.entities.values].forEach(e=>{
+      if (e.id&&!existing.has(e.id)) layer.entities.entities.remove(e);
+    });
+
+    layer.count=_flights.size;
     LAYER_REGISTRY._sync('AVIATION');
     UI.renderFeed(feedItems);
-    LOG.add(`[AVIATION] ${flights.length} contacts plotted · ${milCount} military`, 'sig');
-    UI.setStatus('aviation', `LIVE · ${flights.length}`, 'ok');
-    document.getElementById('sb-flights').innerHTML = `FLIGHTS <span>${flights.length}</span>`;
-    document.getElementById('sb-demo').style.display = 'none';
+    UI.setStatus('aviation',`LIVE · ${_flights.size}`,'ok');
+    document.getElementById('sb-flights').innerHTML=`FLIGHTS <span>${_flights.size}</span>`;
+    document.getElementById('sb-demo').style.display='none';
   }
 
-  // ── Demo fallback ─────────────────────────────────────────────
-  function _demo(reason) {
-    LOG.add(`[AVIATION] Live feeds failed (${reason}) — demo mode`, 'alrt');
-    document.getElementById('sb-demo').style.display = 'block';
-    const DEMO = [
-      {icao24:'a12345',callsign:'UAL901',country:'USA',lon:-87.5,lat:41.0,altitude:36000,velocity:920,heading:90,vrate:0,squawk:'2341',source:'Demo',acType:'B77W',_fromMil:false},
-      {icao24:'a23456',callsign:'AAL100',country:'USA',lon:-118.2,lat:34.05,altitude:31000,velocity:880,heading:270,vrate:-5,squawk:'1200',source:'Demo',acType:'B788',_fromMil:false},
-      {icao24:'3c6444',callsign:'DLH400',country:'Germany',lon:10.0,lat:50.0,altitude:37000,velocity:910,heading:270,vrate:0,squawk:'1000',source:'Demo',acType:'A346',_fromMil:false},
-      {icao24:'400f86',callsign:'BAW176',country:'UK',lon:-0.5,lat:51.5,altitude:35000,velocity:900,heading:80,vrate:5,squawk:'4521',source:'Demo',acType:'B789',_fromMil:false},
-      {icao24:'896060',callsign:'UAE203',country:'UAE',lon:55.36,lat:25.25,altitude:39000,velocity:930,heading:90,vrate:0,squawk:'2001',source:'Demo',acType:'A388',_fromMil:false},
-      {icao24:'780b9b',callsign:'CCA881',country:'China',lon:116.4,lat:39.9,altitude:39000,velocity:930,heading:90,vrate:0,squawk:'5001',source:'Demo',acType:'B77W',_fromMil:false},
-      {icao24:'71be60',callsign:'SIA21',country:'Singapore',lon:104.0,lat:1.35,altitude:35000,velocity:895,heading:45,vrate:0,squawk:'3412',source:'Demo',acType:'A359',_fromMil:false},
-      {icao24:'ae0408',callsign:'RCH872',country:'USA',lon:-77.0,lat:38.0,altitude:35000,velocity:855,heading:100,vrate:0,squawk:'7700',source:'Demo',acType:'C17',_fromMil:true},
-      {icao24:'ae1234',callsign:'REACH01',country:'USA',lon:57.5,lat:21.3,altitude:40000,velocity:870,heading:270,vrate:0,squawk:'7001',source:'Demo',acType:'KC135',_fromMil:true},
-      {icao24:'800e22',callsign:'IAF221',country:'India',lon:77.1,lat:28.6,altitude:28000,velocity:830,heading:270,vrate:0,squawk:'7001',source:'Demo',acType:'C130',_fromMil:true},
-    ];
-    _render(DEMO);
-  }
-
-  // ── Detail renderer ───────────────────────────────────────────
   DETAIL_RENDERERS['flight'] = (d) => {
-    const cls = d.classification||'COMMERCIAL';
-    const col = cls==='MILITARY'?'var(--orange)':'var(--g)';
-    const badge = cls==='MILITARY'
-      ? `<span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,153,0,0.4);background:rgba(255,153,0,0.08)">⚠ MILITARY</span>`
-      : `<span class="detail-badge" style="color:var(--cyan);border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.08)">✈ COMMERCIAL</span>`;
-    const fl  = d.flStr||'—';
-    const spd = d.velocity!=null?`${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)`:'—';
-    const hdg = d.heading!=null?`${Math.round(d.heading)}°`:'—';
-    const vr  = d.vrate!=null
-      ? `<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>` : '—';
-    const sq  = d.squawk
-      ? `<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>` : '—';
+    const cls=d.classification||'COMMERCIAL';
+    const col=cls==='MILITARY'?'var(--orange)':'var(--g)';
+    const badge=cls==='MILITARY'
+      ?`<span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,153,0,0.4);background:rgba(255,153,0,0.08)">⚠ MILITARY</span>`
+      :`<span class="detail-badge" style="color:var(--cyan);border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.08)">✈ COMMERCIAL</span>`;
+    const spd=d.velocity!=null?`${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)`:'—';
+    const vr=d.vrate!=null
+      ?`<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>`:'—';
+    const sq=d.squawk
+      ?`<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>`:'—';
     return `
       <div class="detail-name" style="color:${col}">${d.callsign||(d.icao24||'').toUpperCase()||'UNKNOWN'}</div>
       ${badge}
       <div class="detail-grid" style="margin-top:6px">
         <div><div class="dg-cell-label">ICAO24</div><div class="dg-cell-value">${(d.icao24||'—').toUpperCase()}</div></div>
-        <div><div class="dg-cell-label">Country</div><div class="dg-cell-value">${d.country||'—'} ${d.reg?'· '+d.reg:''}</div></div>
-        <div><div class="dg-cell-label">Flight Level</div><div class="dg-cell-value" style="color:${col};font-weight:bold">${fl}</div></div>
-        <div><div class="dg-cell-label">Aircraft</div><div class="dg-cell-value">${d.acType||'—'}</div></div>
+        <div><div class="dg-cell-label">Country</div><div class="dg-cell-value">${d.country||'—'}</div></div>
+        <div><div class="dg-cell-label">Flight Level</div><div class="dg-cell-value" style="color:${col};font-weight:bold">${d.flStr||'—'}</div></div>
+        <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value">${d.altM?Math.round(d.altM)+'m':'—'}</div></div>
         <div><div class="dg-cell-label">Speed</div><div class="dg-cell-value">${spd}</div></div>
-        <div><div class="dg-cell-label">Heading</div><div class="dg-cell-value">${hdg}</div></div>
+        <div><div class="dg-cell-label">Heading</div><div class="dg-cell-value">${d.heading!=null?Math.round(d.heading)+'°':'—'}</div></div>
         <div><div class="dg-cell-label">Vert Rate</div><div class="dg-cell-value">${vr}</div></div>
         <div><div class="dg-cell-label">Squawk</div><div class="dg-cell-value">${sq}</div></div>
-        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">${d.source||'—'}</div></div>
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">OpenSky Network</div></div>
       </div>`;
   };
 
-  // ── Main refresh — exponential backoff ────────────────────────
-  LAYER_REGISTRY.AVIATION.refresh = async function () {
-    UI.setStatus('aviation', 'FETCHING', 'warn');
-
-    // Try ADS-B Exchange first (authenticated, CORS-safe)
-    const [adsbxResult, milResult] = await Promise.allSettled([
-      _fetchADSBX(), _fetchADSBXMil(),
-    ]);
-
-    const civil = adsbxResult.status==='fulfilled' ? adsbxResult.value : [];
-    const mil   = milResult.status==='fulfilled'   ? milResult.value   : [];
-
-    if (adsbxResult.status==='rejected')
-      LOG.add(`[AVIATION] ADS-B Exchange failed — ${adsbxResult.reason?.message}`, 'warn');
-    if (milResult.status==='rejected')
-      LOG.add(`[AVIATION] ADS-B Exchange MIL failed — ${milResult.reason?.message}`, 'warn');
-
-    if (civil.length > 0 || mil.length > 0) {
-      const merged = _merge([civil, mil]).filter(f =>
-        isFinite(f.lat)&&isFinite(f.lon)
-        &&f.lat>=-90&&f.lat<=90&&f.lon>=-180&&f.lon<=180&&!f.onGround
-      );
-      _render(merged);
-      return;
-    }
-
-    // Fallback to OpenSky
-    LOG.add('[AVIATION] ADS-B Exchange down — trying OpenSky fallback...', 'warn');
-    try {
-      const os = await _fetchOpenSky();
-      if (os.length > 0) {
-        const valid = os.filter(f=>isFinite(f.lat)&&isFinite(f.lon)&&!f.onGround);
-        _render(valid);
-        return;
-      }
-    } catch(e) {
-      LOG.add(`[AVIATION] OpenSky also failed — ${e.message}`, 'warn');
-    }
-
-    _demo('all sources unavailable');
+  LAYER_REGISTRY.AVIATION.refresh=async function(){
+    if (_flights.size>0){_render();return;}
+    await _restPoll();
   };
 
-  LOG.add('[AVIATION] v3 module loaded — ADS-B Exchange + OpenSky', 'air');
-  UI.setStatus('aviation', 'LOADING', 'warn');
-  setTimeout(() => LAYER_REGISTRY.AVIATION.refresh(), 800);
-  return { refresh: () => LAYER_REGISTRY.AVIATION.refresh() };
+  LOG.add('[AVIATION] v4 — OpenSky WebSocket + REST','air');
+  UI.setStatus('aviation','LOADING','warn');
+  _connectWS();
+  _renderTimer=setInterval(_render,10000);
+  _drTimer=setInterval(_drUpdate,1000);
+  setTimeout(()=>{if(_flights.size===0){LOG.add('[AVIATION] No WS data yet — REST fallback','warn');_startREST();}},15000);
+  return {refresh:()=>LAYER_REGISTRY.AVIATION.refresh()};
 
 })(); // END AVIATION_MODULE
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  MARITIME_MODULE  —  v3  LIVE WEBSOCKET                     ║
-// ║  Primary : AISStream WebSocket (authenticated, real-time)   ║
-// ║  Fallback: Demo vessels at global chokepoints               ║
+// ║  MARITIME_MODULE  —  v4  AISSTREAM WEBSOCKET                ║
+// ║  Live WebSocket stream — bypasses CORS entirely             ║
 // ╚══════════════════════════════════════════════════════════════╝
 const MARITIME_MODULE = (() => {
 
-  const AISSTREAM_KEY = '6f8d4921ef79798d5db5949081861588deacc208';
+  const AISSTREAM_KEY='6f8d4921ef79798d5db5949081861588deacc208';
 
-  // ── Vessel classification ─────────────────────────────────────
-  const CLS_STYLE = {
-    CARGO:     { color:'#00ff9d', label:'CARGO',      tag:'tag-ship' },
-    TANKER:    { color:'#ff3c3c', label:'TANKER',     tag:'tag-warn' },
-    NAVAL:     { color:'#00d4ff', label:'NAVAL',      tag:'tag-mil'  },
-    PASSENGER: { color:'#ffe600', label:'PASSENGER',  tag:'tag-air'  },
-    FISHING:   { color:'#b44fff', label:'FISHING',    tag:'tag-ship' },
-    TUG:       { color:'#ff9900', label:'TUG',        tag:'tag-ship' },
-    HIGHSPEED: { color:'#ff9900', label:'HIGH SPEED', tag:'tag-air'  },
-    SAR:       { color:'#ff3c3c', label:'SAR',        tag:'tag-warn' },
-    OTHER:     { color:'#44ffcc', label:'OTHER',      tag:'tag-ship' },
+  const CLS_STYLE={
+    CARGO:    {color:'#00ff9d',label:'CARGO',   tag:'tag-ship'},
+    TANKER:   {color:'#ff3c3c',label:'TANKER',  tag:'tag-warn'},
+    NAVAL:    {color:'#00d4ff',label:'NAVAL',   tag:'tag-mil' },
+    PASSENGER:{color:'#ffe600',label:'PASS',    tag:'tag-air' },
+    FISHING:  {color:'#b44fff',label:'FISHING', tag:'tag-ship'},
+    TUG:      {color:'#ff9900',label:'TUG',     tag:'tag-ship'},
+    HIGHSPEED:{color:'#ff9900',label:'FAST',    tag:'tag-air' },
+    SAR:      {color:'#ff3c3c',label:'SAR',     tag:'tag-warn'},
+    OTHER:    {color:'#44ffcc',label:'OTHER',   tag:'tag-ship'},
   };
 
-  const NAV_STATUS = [
-    'Under way (engine)','At anchor','Not under command','Restricted maneuverability',
-    'Constrained by draught','Moored','Aground','Engaged in fishing',
-    'Under way (sailing)','Reserved','Reserved','Reserved',
+  const NAV_STATUS=[
+    'Under way','At anchor','Not under command','Restricted maneuvering',
+    'Constrained by draught','Moored','Aground','Fishing',
+    'Under way (sail)','Reserved','Reserved','Reserved',
     'Reserved','Reserved','AIS-SART','Undefined',
   ];
 
   function _classify(v) {
-    const t    = parseInt(v.shipType||0);
-    const mmsi = String(v.mmsi||'');
-    const name = (v.name||'').toUpperCase();
-    const mmsiPfx = parseInt(mmsi.substring(0,3));
-    if (mmsiPfx>=100&&mmsiPfx<=199) return 'NAVAL';
-    if (/\b(HMS|USS|INS|PNS|BNS|USCG|FRIGATE|DESTROYER|CORVETTE|WARSHIP|PATROL|COAST.?GUARD|NAVAL)\b/.test(name)) return 'NAVAL';
+    const t=parseInt(v.shipType||0);
+    const mmsi=String(v.mmsi||'');
+    const name=(v.name||'').toUpperCase();
+    const pfx=parseInt(mmsi.substring(0,3));
+    if (pfx>=100&&pfx<=199) return 'NAVAL';
+    if (/\b(HMS|USS|INS|PNS|USCG|FRIGATE|DESTROYER|CORVETTE|WARSHIP|PATROL|COAST.?GUARD|NAVAL)\b/.test(name)) return 'NAVAL';
     if (t>=35&&t<=39) return 'NAVAL';
     if (t>=20&&t<=29) return 'HIGHSPEED';
     if (t===51||t===52) return 'SAR';
@@ -2251,272 +2166,159 @@ const MARITIME_MODULE = (() => {
     return 'OTHER';
   }
 
-  // ── Global chokepoints ────────────────────────────────────────
-  const CHOKEPOINTS = [
-    {name:'MALACCA STRAIT',     latMin:1.0,  latMax:6.5,  lonMin:99.0,  lonMax:104.5},
-    {name:'STRAIT OF HORMUZ',   latMin:25.5, latMax:27.5, lonMin:56.0,  lonMax:59.5},
-    {name:'BAB-EL-MANDEB',      latMin:11.5, latMax:13.5, lonMin:42.5,  lonMax:44.5},
-    {name:'SUEZ CANAL',         latMin:29.0, latMax:33.0, lonMin:31.5,  lonMax:34.5},
-    {name:'STRAIT OF GIBRALTAR',latMin:35.5, latMax:36.5, lonMin:-6.0,  lonMax:-5.0},
-    {name:'ENGLISH CHANNEL',    latMin:50.0, latMax:52.5, lonMin:-2.0,  lonMax:2.5},
-    {name:'SINGAPORE STRAIT',   latMin:1.1,  latMax:1.5,  lonMin:103.5, lonMax:104.2},
-    {name:'TAIWAN STRAIT',      latMin:22.0, latMax:27.0, lonMin:119.0, lonMax:121.5},
-    {name:'PANAMA CANAL',       latMin:8.5,  latMax:10.0, lonMin:-80.0, lonMax:-77.5},
-    {name:'CAPE OF GOOD HOPE',  latMin:-35.5,latMax:-33.0,lonMin:17.5,  lonMax:20.0},
+  const CHOKEPOINTS=[
+    {name:'MALACCA STRAIT',    latMin:1.0,latMax:6.5,  lonMin:99.0, lonMax:104.5},
+    {name:'STRAIT OF HORMUZ', latMin:25.5,latMax:27.5,lonMin:56.0, lonMax:59.5},
+    {name:'BAB-EL-MANDEB',    latMin:11.5,latMax:13.5,lonMin:42.5, lonMax:44.5},
+    {name:'SUEZ CANAL',       latMin:29.0,latMax:33.0,lonMin:31.5, lonMax:34.5},
+    {name:'GIBRALTAR',        latMin:35.5,latMax:36.5,lonMin:-6.0, lonMax:-5.0},
+    {name:'ENGLISH CHANNEL',  latMin:50.0,latMax:52.5,lonMin:-2.0, lonMax:2.5},
+    {name:'SINGAPORE STRAIT', latMin:1.1, latMax:1.5, lonMin:103.5,lonMax:104.2},
+    {name:'TAIWAN STRAIT',    latMin:22.0,latMax:27.0,lonMin:119.0,lonMax:121.5},
+    {name:'PANAMA CANAL',     latMin:8.5, latMax:10.0,lonMin:-80.0,lonMax:-77.5},
   ];
 
-  function _getChokepoint(lat,lon) {
-    return CHOKEPOINTS.find(z=>lat>=z.latMin&&lat<=z.latMax&&lon>=z.lonMin&&lon<=z.lonMax)||null;
-  }
-
-  // ── Ship icon factory ─────────────────────────────────────────
-  const _iconCache = {};
-  function _makeShipIcon(cls, heading) {
-    const SZ=36, c=document.createElement('canvas');
-    c.width=c.height=SZ;
-    const ctx=c.getContext('2d');
-    const col=CLS_STYLE[cls]?.color||'#44ffcc';
-    ctx.save(); ctx.translate(SZ/2,SZ/2);
-    ctx.rotate((heading||0)*Math.PI/180);
-    ctx.shadowColor=col; ctx.shadowBlur=10;
-    ctx.fillStyle=col; ctx.strokeStyle=col; ctx.lineWidth=1;
-    if (cls==='NAVAL') {
-      ctx.beginPath();
-      ctx.moveTo(0,-14);ctx.lineTo(5,-4);ctx.lineTo(5,8);
+  const _iconCache={};
+  function _makeShipIcon(cls,heading){
+    const SZ=36,c=document.createElement('canvas');c.width=c.height=SZ;
+    const ctx=c.getContext('2d');const col=CLS_STYLE[cls]?.color||'#44ffcc';
+    ctx.save();ctx.translate(SZ/2,SZ/2);ctx.rotate((heading||0)*Math.PI/180);
+    ctx.shadowColor=col;ctx.shadowBlur=10;ctx.fillStyle=col;ctx.strokeStyle=col;ctx.lineWidth=1;
+    if (cls==='NAVAL'){
+      ctx.beginPath();ctx.moveTo(0,-14);ctx.lineTo(5,-4);ctx.lineTo(5,8);
       ctx.lineTo(3,12);ctx.lineTo(-3,12);ctx.lineTo(-5,8);ctx.lineTo(-5,-4);
-      ctx.closePath();ctx.fill();
-      ctx.fillStyle='#ffffff66';ctx.fillRect(-2,-6,4,6);
-    } else if (cls==='TANKER') {
-      ctx.beginPath();
-      ctx.moveTo(0,-13);ctx.lineTo(7,-4);ctx.lineTo(7,10);ctx.lineTo(-7,10);ctx.lineTo(-7,-4);
-      ctx.closePath();ctx.fill();
-    } else if (cls==='PASSENGER') {
-      ctx.beginPath();
-      ctx.moveTo(0,-14);ctx.lineTo(6,-2);ctx.lineTo(6,10);ctx.lineTo(-6,10);ctx.lineTo(-6,-2);
-      ctx.closePath();ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(0,-13);ctx.lineTo(6,-2);ctx.lineTo(6,10);
-      ctx.lineTo(3,12);ctx.lineTo(-3,12);ctx.lineTo(-6,10);ctx.lineTo(-6,-2);
-      ctx.closePath();ctx.fill();
+      ctx.closePath();ctx.fill();ctx.fillStyle='#ffffff66';ctx.fillRect(-2,-6,4,6);
+    }else if(cls==='TANKER'){
+      ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(7,-4);ctx.lineTo(7,10);ctx.lineTo(-7,10);ctx.lineTo(-7,-4);ctx.closePath();ctx.fill();
+    }else if(cls==='PASSENGER'){
+      ctx.beginPath();ctx.moveTo(0,-14);ctx.lineTo(6,-2);ctx.lineTo(6,10);ctx.lineTo(-6,10);ctx.lineTo(-6,-2);ctx.closePath();ctx.fill();
+    }else{
+      ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(6,-2);ctx.lineTo(6,10);
+      ctx.lineTo(3,12);ctx.lineTo(-3,12);ctx.lineTo(-6,10);ctx.lineTo(-6,-2);ctx.closePath();ctx.fill();
     }
-    ctx.restore();
-    return c;
+    ctx.restore();return c;
   }
-  function _getIcon(cls,heading) {
-    const bucket=Math.round((heading||0)/10)*10;
-    const key=`${cls}_${bucket}`;
-    if(!_iconCache[key])_iconCache[key]=_makeShipIcon(cls,bucket);
-    return _iconCache[key];
+  function _getIcon(cls,heading){
+    const b=Math.round((heading||0)/10)*10,k=`${cls}_${b}`;
+    if(!_iconCache[k])_iconCache[k]=_makeShipIcon(cls,b);return _iconCache[k];
   }
 
-  // ── AISStream WebSocket ───────────────────────────────────────
-  const _vessels = new Map(); // mmsi → vessel data
-  let   _ws      = null;
-  let   _wsTimer = null;
-  let   _drTimer = null;
+  const _vessels=new Map();
+  let _ws=null,_drTimer=null;
 
-  function _connectAISStream() {
-    if (_ws && (_ws.readyState===WebSocket.OPEN||_ws.readyState===WebSocket.CONNECTING)) return;
-
-    LOG.add('[MARITIME] Connecting to AISStream WebSocket...', 'sys');
-    UI.setStatus('maritime', 'CONNECTING', 'warn');
-
-    _ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
-
-    _ws.onopen = () => {
-      LOG.add('[MARITIME] AISStream connected — subscribing global feed', 'sig');
-      UI.setStatus('maritime', 'STREAMING', 'ok');
-      const sub = {
-        APIKey: AISSTREAM_KEY,
-        BoundingBoxes: [[[-90,-180],[90,180]]],
-        FilterMessageTypes: ['PositionReport','ShipStaticData'],
-      };
-      _ws.send(JSON.stringify(sub));
+  function _connectAISStream(){
+    if(_ws&&(_ws.readyState===WebSocket.OPEN||_ws.readyState===WebSocket.CONNECTING))return;
+    LOG.add('[MARITIME] Connecting AISStream WebSocket...','sys');
+    UI.setStatus('maritime','CONNECTING','warn');
+    _ws=new WebSocket('wss://stream.aisstream.io/v0/stream');
+    _ws.onopen=()=>{
+      LOG.add('[MARITIME] AISStream connected — global feed','sig');
+      UI.setStatus('maritime','STREAMING','ok');
+      _ws.send(JSON.stringify({
+        APIKey:AISSTREAM_KEY,
+        BoundingBoxes:[[[-90,-180],[90,180]]],
+        FilterMessageTypes:['PositionReport','ShipStaticData'],
+      }));
     };
-
-    _ws.onmessage = (evt) => {
-      try {
-        const msg = JSON.parse(evt.data);
-        const mmsi = String(msg.MetaData?.MMSI||'');
-        if (!mmsi) return;
-
-        if (msg.Message?.PositionReport) {
-          const pr = msg.Message.PositionReport;
-          const lat = parseFloat(pr.Latitude||0);
-          const lon = parseFloat(pr.Longitude||0);
-          if (!isFinite(lat)||!isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return;
-          if (lat===0&&lon===0) return;
-
-          const existing = _vessels.get(mmsi)||{};
-          _vessels.set(mmsi, {
-            ...existing, mmsi,
-            lat, lon,
-            sog:    parseFloat(pr.Sog||0),
-            cog:    parseFloat(pr.Cog||0),
+    _ws.onmessage=(evt)=>{
+      try{
+        const msg=JSON.parse(evt.data);
+        const mmsi=String(msg.MetaData?.MMSI||'');if(!mmsi)return;
+        if(msg.Message?.PositionReport){
+          const pr=msg.Message.PositionReport;
+          const lat=parseFloat(pr.Latitude||0),lon=parseFloat(pr.Longitude||0);
+          if(!isFinite(lat)||!isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180)return;
+          if(lat===0&&lon===0)return;
+          _vessels.set(mmsi,{...(_vessels.get(mmsi)||{}),mmsi,lat,lon,
+            sog:parseFloat(pr.Sog||0),cog:parseFloat(pr.Cog||0),
             heading:parseFloat(pr.TrueHeading||pr.Cog||0),
-            status: parseInt(pr.NavigationalStatus||15),
-            source: 'AISStream',
-          });
+            status:parseInt(pr.NavigationalStatus||15),source:'AISStream'});
         }
-
-        if (msg.Message?.ShipStaticData) {
-          const sd = msg.Message.ShipStaticData;
-          const existing = _vessels.get(mmsi)||{};
-          _vessels.set(mmsi, {
-            ...existing, mmsi,
-            name:        (sd.Name||existing.name||'UNKNOWN').trim(),
-            callsign:    (sd.CallSign||existing.callsign||'').trim(),
-            shipType:    parseInt(sd.Type||existing.shipType||0),
-            destination: (sd.Destination||existing.destination||'').trim(),
-            draught:     parseFloat(sd.MaximumStaticDraught||0)||null,
-            source:      'AISStream',
-          });
+        if(msg.Message?.ShipStaticData){
+          const sd=msg.Message.ShipStaticData;
+          _vessels.set(mmsi,{...(_vessels.get(mmsi)||{}),mmsi,
+            name:(sd.Name||'UNKNOWN').trim(),callsign:(sd.CallSign||'').trim(),
+            shipType:parseInt(sd.Type||0),destination:(sd.Destination||'').trim(),
+            draught:parseFloat(sd.MaximumStaticDraught||0)||null,source:'AISStream'});
         }
-      } catch(e) {}
+      }catch(e){}
     };
-
-    _ws.onerror = (e) => {
-      LOG.add('[MARITIME] AISStream WebSocket error — falling back to demo', 'warn');
-      UI.setStatus('maritime', 'ERROR', 'err');
-    };
-
-    _ws.onclose = () => {
-      LOG.add('[MARITIME] AISStream disconnected — reconnecting in 30s', 'warn');
-      UI.setStatus('maritime', 'RECONNECTING', 'warn');
-      setTimeout(_connectAISStream, 30000);
+    _ws.onerror=()=>{LOG.add('[MARITIME] AISStream error','warn');UI.setStatus('maritime','ERROR','err');};
+    _ws.onclose=()=>{
+      LOG.add('[MARITIME] AISStream closed — reconnect 30s','warn');
+      UI.setStatus('maritime','RECONNECTING','warn');
+      _ws=null;setTimeout(_connectAISStream,30000);
     };
   }
 
-  // ── Dead-reckoning ────────────────────────────────────────────
-  function _drUpdate() {
-    const now = Date.now();
-    _vessels.forEach((v, mmsi) => {
-      if (!v.sog||v.sog<0.3||!v._lastTick) { v._lastTick=now; return; }
-      const dt=(now-v._lastTick)/1000; v._lastTick=now;
-      const spdMs=v.sog*0.514444;
-      const distM=spdMs*dt;
-      const R=6371000;
-      const hdgRad=(v.cog||0)*Math.PI/180;
-      const latRad=v.lat*Math.PI/180;
+  function _drUpdate(){
+    const now=Date.now();
+    _vessels.forEach((v,mmsi)=>{
+      if(!v.sog||v.sog<0.3||!v._lastTick){v._lastTick=now;return;}
+      const dt=(now-v._lastTick)/1000;v._lastTick=now;
+      const spdMs=v.sog*0.514444,distM=spdMs*dt,R=6371000;
+      const hdgRad=(v.cog||0)*Math.PI/180,latRad=v.lat*Math.PI/180;
       v.lat+=(distM/R)*(180/Math.PI)*Math.cos(hdgRad);
       v.lon+=(distM/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
-      v.lat=Math.max(-89,Math.min(89,v.lat));
-      v.lon=((v.lon+540)%360)-180;
+      v.lat=Math.max(-89,Math.min(89,v.lat));v.lon=((v.lon+540)%360)-180;
       const entity=LAYER_REGISTRY.MARITIME.entities.entities.getById(mmsi);
-      if(entity&&isFinite(v.lat)&&isFinite(v.lon)) {
-        try {
-          entity.position=Cesium.Cartesian3.fromDegrees(v.lon,v.lat,1);
-          if(entity._oeData){entity._oeData.lat=v.lat;entity._oeData.lon=v.lon;}
-        } catch(e){}
+      if(entity&&isFinite(v.lat)&&isFinite(v.lon)){
+        try{entity.position=Cesium.Cartesian3.fromDegrees(v.lon,v.lat,1);
+          if(entity._oeData){entity._oeData.lat=v.lat;entity._oeData.lon=v.lon;}}catch(e){}
       }
     });
   }
 
-  // ── Render snapshot of current vessel map ─────────────────────
-  function _renderSnapshot() {
-    const layer = LAYER_REGISTRY.MARITIME;
+  function _renderSnapshot(){
+    const layer=LAYER_REGISTRY.MARITIME;
     layer.entities.entities.removeAll();
-    const alerted = new Set();
-    let navalCount=0;
-    const feedItems=[];
-
-    // Only render vessels that have position data
-    const withPos = Array.from(_vessels.values()).filter(v=>v.lat&&v.lon&&isFinite(v.lat)&&isFinite(v.lon));
-
-    withPos.forEach(v => {
-      const cls   = _classify(v);
-      const style = CLS_STYLE[cls]||CLS_STYLE.OTHER;
-      const col   = style.color;
-      const icon  = _getIcon(cls, v.heading||v.cog||0);
-      if (cls==='NAVAL') {
-        navalCount++;
-        LOG.add(`[SIGINT] NAVAL — ${v.name||v.mmsi} MMSI:${v.mmsi}`, 'warn');
-      }
-      const zone=_getChokepoint(v.lat,v.lon);
-      if(zone&&!alerted.has(zone.name)){
-        alerted.add(zone.name);
-        LOG.add(`[SHIP] DENSITY — ${zone.name} · ${v.name||v.mmsi}`,'warn');
-      }
+    const alerted=new Set();let navalCount=0;const feedItems=[];
+    const withPos=[..._vessels.values()].filter(v=>v.lat&&v.lon&&isFinite(v.lat)&&isFinite(v.lon));
+    withPos.forEach(v=>{
+      const cls=_classify(v);const style=CLS_STYLE[cls]||CLS_STYLE.OTHER;const col=style.color;
+      if(cls==='NAVAL'){navalCount++;LOG.add(`[SIGINT] NAVAL — ${v.name||v.mmsi}`,'warn');}
+      const zone=CHOKEPOINTS.find(z=>v.lat>=z.latMin&&v.lat<=z.latMax&&v.lon>=z.lonMin&&v.lon<=z.lonMax);
+      if(zone&&!alerted.has(zone.name)){alerted.add(zone.name);LOG.add(`[SHIP] ${zone.name} density`,'warn');}
       v._lastTick=Date.now();
-
       const entity=layer.entities.entities.add({
-        id: v.mmsi||undefined,
-        position: Cesium.Cartesian3.fromDegrees(v.lon,v.lat,1),
-        billboard:{
-          image:icon, width:cls==='NAVAL'?30:26, height:cls==='NAVAL'?30:26,
+        id:v.mmsi,
+        position:Cesium.Cartesian3.fromDegrees(v.lon,v.lat,1),
+        billboard:{image:_getIcon(cls,v.heading||v.cog||0),width:cls==='NAVAL'?30:26,height:cls==='NAVAL'?30:26,
           verticalOrigin:Cesium.VerticalOrigin.CENTER,
           scaleByDistance:new Cesium.NearFarScalar(50_000,1.5,6_000_000,0.2),
           translucencyByDistance:new Cesium.NearFarScalar(80_000,1.0,8_000_000,0.3),
-          disableDepthTestDistance:500,
-        },
-        label:{
-          text:v.name||v.mmsi,
-          font:'10px Share Tech Mono, monospace',
+          disableDepthTestDistance:500},
+        label:{text:v.name||v.mmsi,font:'10px Share Tech Mono, monospace',
           fillColor:Cesium.Color.fromCssColorString(col),
           outlineColor:Cesium.Color.BLACK,outlineWidth:2,
           style:Cesium.LabelStyle.FILL_AND_OUTLINE,
           pixelOffset:new Cesium.Cartesian2(0,-20),
           scaleByDistance:new Cesium.NearFarScalar(50_000,1.0,1_500_000,0.0),
-          disableDepthTestDistance:500,
-          showBackground:true,
+          disableDepthTestDistance:500,showBackground:true,
           backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
-          backgroundPadding:new Cesium.Cartesian2(3,2),
-        },
+          backgroundPadding:new Cesium.Cartesian2(3,2)},
       });
-
       entity._oeData={...v,type:'ship',classification:cls};
-      feedItems.push({
-        type:'ship',name:v.name||v.mmsi,
+      feedItems.push({type:'ship',name:v.name||v.mmsi,
         sub:`${v.destination||'?'} · ${v.sog!=null?v.sog.toFixed(1)+'kn':'?'} · ${style.label}`,
-        color:col,tag:style.tag,tagLabel:style.label,
-        lat:v.lat,lon:v.lon,feedAlt:120_000,
-      });
+        color:col,tag:style.tag,tagLabel:style.label,lat:v.lat,lon:v.lon,feedAlt:120_000});
     });
-
-    if(_drTimer) clearInterval(_drTimer);
-    _drTimer=setInterval(_drUpdate,5000);
-
-    layer.count=withPos.length;
-    LAYER_REGISTRY._sync('MARITIME');
+    if(_drTimer)clearInterval(_drTimer);_drTimer=setInterval(_drUpdate,5000);
+    layer.count=withPos.length;LAYER_REGISTRY._sync('MARITIME');
     LOG.add(`[MARITIME] ${withPos.length} vessels · ${navalCount} naval`,'ship');
     UI.setStatus('maritime',`LIVE · ${withPos.length}`,'ok');
     document.getElementById('sb-ships').innerHTML=`VESSELS <span>${withPos.length}</span>`;
   }
 
-  // ── Demo fallback ─────────────────────────────────────────────
-  function _demo() {
-    LOG.add('[MARITIME] AISStream unavailable — loading demo vessels','warn');
-    document.getElementById('sb-demo').style.display='block';
-    const DEMO=[
-      {mmsi:'370100000',name:'MV CHITTAGONG EXPRESS',callsign:'S2ABC',lat:22.20,lon:91.80,sog:9.5,cog:270,heading:270,shipType:71,status:0,destination:'BGCGP',source:'Demo'},
-      {mmsi:'370200000',name:'MT ARABIAN STAR',callsign:'A4XYZ',lat:13.50,lon:50.00,sog:12.0,cog:155,heading:155,shipType:80,status:0,destination:'INMUN',source:'Demo'},
-      {mmsi:'370300000',name:'MSC COLOMBO',callsign:'9VCB1',lat:6.90,lon:79.85,sog:8.0,cog:340,heading:340,shipType:71,status:0,destination:'LKCMB',source:'Demo'},
-      {mmsi:'370400000',name:'INS VIKRANT',callsign:'VTAB1',lat:15.00,lon:72.00,sog:18.0,cog:200,heading:200,shipType:35,status:0,destination:'INMAA',source:'Demo'},
-      {mmsi:'370500000',name:'LNG KARACHI',callsign:'APLNG',lat:24.80,lon:66.90,sog:11.0,cog:90,heading:90,shipType:84,status:0,destination:'PKBQM',source:'Demo'},
-      {mmsi:'370600000',name:'COSCO PACIFIC',callsign:'BOZZ1',lat:1.20,lon:103.9,sog:12.0,cog:280,heading:280,shipType:71,status:0,destination:'SGSIN',source:'Demo'},
-      {mmsi:'370700000',name:'GIBRALTAR TRADER',callsign:'GIBX1',lat:36.00,lon:-5.60,sog:14.0,cog:90,heading:90,shipType:70,status:0,destination:'GBFXT',source:'Demo'},
-      {mmsi:'371200000',name:'MT GULF TRADER',callsign:'A7GTX',lat:26.00,lon:56.50,sog:13.0,cog:100,heading:100,shipType:80,status:0,destination:'AEDXB',source:'Demo'},
-      {mmsi:'371300000',name:'CAPE HORN CARRIER',callsign:'LQCPH',lat:-55.0,lon:-67.0,sog:11.0,cog:90,heading:90,shipType:70,status:0,destination:'ARBUE',source:'Demo'},
-      {mmsi:'371800000',name:'CAPE TRADER',callsign:'ZSCPT',lat:-34.0,lon:18.50,sog:13.0,cog:120,heading:120,shipType:70,status:0,destination:'ZAJNB',source:'Demo'},
-      {mmsi:'371900000',name:'HMS DRAGON',callsign:'GBHMS',lat:36.10,lon:-5.35,sog:15.0,cog:180,heading:180,shipType:35,status:0,destination:'GBPOR',source:'Demo'},
-      {mmsi:'372000000',name:'OOCL PANAMA',callsign:'C6PAN',lat:9.00,lon:-79.5,sog:10.0,cog:315,heading:315,shipType:71,status:0,destination:'USLAX',source:'Demo'},
-    ];
-    DEMO.forEach(v=>_vessels.set(v.mmsi,v));
-    _renderSnapshot();
-  }
-
-  // ── Detail renderer ───────────────────────────────────────────
-  DETAIL_RENDERERS['ship'] = (d) => {
-    const style=CLS_STYLE[d.classification]||CLS_STYLE.OTHER;
-    const col=style.color;
+  DETAIL_RENDERERS['ship']=(d)=>{
+    const style=CLS_STYLE[d.classification]||CLS_STYLE.OTHER;const col=style.color;
     const navSt=NAV_STATUS[d.status]||'Unknown';
     const sogKts=d.sog!=null?`${d.sog.toFixed(1)} kts`:'—';
-    const sogKmh=d.sog!=null?`(${(d.sog*1.852).toFixed(0)} km/h)` :'';
-    const clsIcon=d.classification==='NAVAL'?'⚓':d.classification==='TANKER'?'⚠':d.classification==='PASSENGER'?'🚢':'📦';
+    const sogKmh=d.sog!=null?`(${(d.sog*1.852).toFixed(0)} km/h)`:'';
+    const icon=d.classification==='NAVAL'?'⚓':d.classification==='TANKER'?'⚠':'📦';
     return `
       <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
-      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${clsIcon} ${style.label}</span>
+      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${icon} ${style.label}</span>
       <div class="detail-grid" style="margin-top:6px">
         <div><div class="dg-cell-label">MMSI</div><div class="dg-cell-value">${d.mmsi||'—'}</div></div>
         <div><div class="dg-cell-label">Callsign</div><div class="dg-cell-value">${d.callsign||'—'}</div></div>
@@ -2524,368 +2326,191 @@ const MARITIME_MODULE = (() => {
         <div><div class="dg-cell-label">Course</div><div class="dg-cell-value">${d.cog!=null?Math.round(d.cog)+'°':'—'}</div></div>
         <div><div class="dg-cell-label">Destination</div><div class="dg-cell-value">${d.destination||'—'}</div></div>
         <div><div class="dg-cell-label">Nav Status</div><div class="dg-cell-value" style="font-size:0.5rem">${navSt}</div></div>
-        ${d.draught?`<div><div class="dg-cell-label">Draught</div><div class="dg-cell-value">${d.draught}m</div></div>`:''}
-        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">${d.source||'—'}</div></div>
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">AISStream</div></div>
       </div>`;
   };
 
-  // ── Main refresh — renders current snapshot of WebSocket data ─
-  LAYER_REGISTRY.MARITIME.refresh = async function () {
-    if (_vessels.size > 0) {
-      _renderSnapshot();
-    }
-    // WebSocket stays alive — no need to re-fetch
-  };
+  LAYER_REGISTRY.MARITIME.refresh=async function(){if(_vessels.size>0)_renderSnapshot();};
 
-  // Boot — connect WebSocket immediately, render every 15s
-  LOG.add('[MARITIME] v3 module loaded — AISStream WebSocket','ship');
+  LOG.add('[MARITIME] v4 — AISStream WebSocket','ship');
   UI.setStatus('maritime','LOADING','warn');
-
-  // Try WebSocket connection
-  try {
-    _connectAISStream();
-    // Give WebSocket 8 seconds to collect vessels, then render
-    setTimeout(() => {
-      if (_vessels.size > 0) {
-        _renderSnapshot();
-      } else {
-        LOG.add('[MARITIME] No vessels received yet — waiting...','warn');
-        // Try again at 15s
-        setTimeout(() => {
-          if (_vessels.size > 0) _renderSnapshot();
-          else _demo();
-        }, 7000);
-      }
-    }, 8000);
-    // Periodic snapshot render every 30s
-    setInterval(() => { if(_vessels.size>0) _renderSnapshot(); }, 30000);
-  } catch(e) {
-    LOG.add(`[MARITIME] WebSocket failed — ${e.message}`,'warn');
-    setTimeout(_demo, 1000);
-  }
-
-  return { refresh: () => LAYER_REGISTRY.MARITIME.refresh() };
+  _connectAISStream();
+  setTimeout(()=>{
+    if(_vessels.size>0)_renderSnapshot();
+    else LOG.add('[MARITIME] Waiting for vessel data...','warn');
+  },8000);
+  setInterval(()=>{if(_vessels.size>0)_renderSnapshot();},30000);
+  return {refresh:()=>LAYER_REGISTRY.MARITIME.refresh()};
 
 })(); // END MARITIME_MODULE
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  SATELLITE_MODULE  —  v3  N2YO AUTHENTICATED                ║
-// ║  Primary : N2YO API (CORS-safe, authenticated)              ║
-// ║  Catalog : Key orbital objects + full above-horizon query   ║
-// ║  Fallback: ivanstanojevic.me TLE proxy (has CORS headers)   ║
+// ║  SATELLITE_MODULE  —  v4  SATELLITE.JS SGP4                 ║
+// ║  TLE source: tle.ivanstanojevic.me (CORS-safe)              ║
+// ║  Propagator: satellite.js (FlightRadar24-grade SGP4)        ║
 // ╚══════════════════════════════════════════════════════════════╝
 const SATELLITE_MODULE = (() => {
 
-  // ── Curated catalog — 24 key objects ─────────────────────────
-  const SAT_CATALOG = [
-    {norad:'25544', name:'ISS',            cat:'STATION',  color:'#00ff9d', priority:1},
-    {norad:'48274', name:'CSS (Tiangong)', cat:'STATION',  color:'#ff9900', priority:1},
-    {norad:'43473', name:'GPS IIF-12',     cat:'GPS',      color:'#b44fff', priority:2},
-    {norad:'37753', name:'GLONASS-M 730',  cat:'GLONASS',  color:'#9944ff', priority:2},
-    {norad:'37846', name:'GALILEO-101',    cat:'GALILEO',  color:'#aa44ff', priority:2},
-    {norad:'44231', name:'BEIDOU-3 M1',    cat:'BEIDOU',   color:'#cc44ff', priority:2},
-    {norad:'38337', name:'SUOMI NPP',      cat:'WEATHER',  color:'#ffe600', priority:1},
-    {norad:'41240', name:'GOES-16',        cat:'WEATHER',  color:'#ffe600', priority:1},
-    {norad:'43226', name:'HIMAWARI-9',     cat:'WEATHER',  color:'#ffaa00', priority:1},
-    {norad:'44713', name:'INSAT-3DR',      cat:'WEATHER',  color:'#ffaa00', priority:1},
-    {norad:'43689', name:'SENTINEL-3B',    cat:'EO',       color:'#c8ff00', priority:2},
-    {norad:'39634', name:'RESOURCESAT-2',  cat:'EO',       color:'#c8ff00', priority:2},
-    {norad:'43286', name:'BANGABANDHU-1',  cat:'GEO',      color:'#00d4ff', priority:1},
-    {norad:'41838', name:'GSAT-18',        cat:'GEO',      color:'#00d4ff', priority:2},
-    {norad:'27386', name:'USA-186',        cat:'MIL',      color:'#ff3c3c', priority:1},
-    {norad:'44502', name:'COSMO-4',        cat:'MIL',      color:'#ff3c3c', priority:2},
-    {norad:'48465', name:'YAOGAN-32B',     cat:'MIL',      color:'#ff3c3c', priority:2},
-    {norad:'33591', name:'IRIDIUM-33',     cat:'IRIDIUM',  color:'#00d4ff', priority:2},
-    {norad:'25994', name:'TERRA',          cat:'EO',       color:'#c8ff00', priority:1},
-    {norad:'27424', name:'AQUA',           cat:'EO',       color:'#c8ff00', priority:1},
-    {norad:'07530', name:'OSCAR-7',        cat:'AMATEUR',  color:'#44ffcc', priority:2},
-    {norad:'28654', name:'NOAA-18',        cat:'WEATHER',  color:'#ffe600', priority:1},
-    {norad:'33591', name:'METOP-A',        cat:'WEATHER',  color:'#ffe600', priority:1},
-    {norad:'40069', name:'METEOR-M 2',     cat:'WEATHER',  color:'#ffaa00', priority:2},
+  const SAT_CATALOG=[
+    {norad:'25544',name:'ISS',            cat:'STATION', color:'#00ff9d',priority:1},
+    {norad:'48274',name:'CSS Tiangong',   cat:'STATION', color:'#ff9900',priority:1},
+    {norad:'32711',name:'GPS IIF-2',      cat:'GPS',     color:'#b44fff',priority:2},
+    {norad:'37753',name:'GLONASS-M 747',  cat:'GLONASS', color:'#9944ff',priority:2},
+    {norad:'41859',name:'GALILEO-14',     cat:'GALILEO', color:'#aa44ff',priority:2},
+    {norad:'44231',name:'BEIDOU-3 M5',    cat:'BEIDOU',  color:'#cc44ff',priority:2},
+    {norad:'38337',name:'SUOMI NPP',      cat:'WEATHER', color:'#ffe600',priority:1},
+    {norad:'41240',name:'GOES-16',        cat:'WEATHER', color:'#ffe600',priority:1},
+    {norad:'43226',name:'HIMAWARI-9',     cat:'WEATHER', color:'#ffaa00',priority:1},
+    {norad:'28654',name:'NOAA-18',        cat:'WEATHER', color:'#ffe600',priority:1},
+    {norad:'29499',name:'NOAA-19',        cat:'WEATHER', color:'#ffe600',priority:1},
+    {norad:'40069',name:'METEOR-M N2',    cat:'WEATHER', color:'#ffaa00',priority:2},
+    {norad:'25994',name:'TERRA',          cat:'EO',      color:'#c8ff00',priority:1},
+    {norad:'27424',name:'AQUA',           cat:'EO',      color:'#c8ff00',priority:1},
+    {norad:'43689',name:'SENTINEL-3B',    cat:'EO',      color:'#c8ff00',priority:2},
+    {norad:'39634',name:'RESOURCESAT-2',  cat:'EO',      color:'#c8ff00',priority:2},
+    {norad:'46495',name:'LANDSAT-9',      cat:'EO',      color:'#c8ff00',priority:2},
+    {norad:'43286',name:'BANGABANDHU-1',  cat:'GEO',     color:'#00d4ff',priority:1},
+    {norad:'41838',name:'GSAT-18',        cat:'GEO',     color:'#00d4ff',priority:2},
+    {norad:'36395',name:'INTELSAT-14',    cat:'GEO',     color:'#00d4ff',priority:2},
+    {norad:'27386',name:'USA-186',        cat:'MIL',     color:'#ff3c3c',priority:1},
+    {norad:'44502',name:'COSMO-4',        cat:'MIL',     color:'#ff3c3c',priority:2},
+    {norad:'48465',name:'YAOGAN-32B',     cat:'MIL',     color:'#ff3c3c',priority:2},
+    {norad:'47688',name:'ONEWEB-0223',    cat:'ONEWEB',  color:'#00bbdd',priority:2},
+    {norad:'07530',name:'OSCAR-7',        cat:'AMATEUR', color:'#44ffcc',priority:2},
   ];
 
-  // ── TLE fetch — Ivan proxy primary (has CORS), Celestrak via
-  //   corsproxy.io as fallback (targeted, only for Celestrak) ──
-  const _tleCache = {};
-
-  async function _fetchTLE(norad) {
-    if (_tleCache[norad] && (Date.now()-_tleCache[norad].ts) < 3_600_000)
-      return _tleCache[norad].tle;
-
-    const sources = [
-      // Ivan Stanojevic proxy — proper CORS headers, reliable
-      async () => {
-        const res = await fetch(`https://tle.ivanstanojevic.me/api/tle/${norad}`,
-                                { signal: AbortSignal.timeout(10000) });
-        if (!res.ok) throw new Error(`Ivan HTTP ${res.status}`);
-        const j = await res.json();
-        if (!j.line1||!j.line2) throw new Error('Ivan: missing TLE lines');
-        return { name: j.name||String(norad), line1: j.line1, line2: j.line2 };
-      },
-      // Celestrak via corsproxy.io — only used if Ivan fails
-      async () => {
-        const target = `https://celestrak.org/satcat/tle.php?CATNR=${norad}`;
-        const url    = `https://corsproxy.io/?${encodeURIComponent(target)}`;
-        const res    = await fetch(url, { signal: AbortSignal.timeout(12000) });
-        if (!res.ok) throw new Error(`Celestrak proxy HTTP ${res.status}`);
-        const text  = await res.text();
-        const lines = text.trim().split('\n').map(l=>l.trim()).filter(Boolean);
-        if (lines.length >= 3) return { name:lines[0], line1:lines[1], line2:lines[2] };
-        if (lines.length === 2 && lines[0].startsWith('1 '))
-          return { name:String(norad), line1:lines[0], line2:lines[1] };
-        throw new Error('Celestrak: bad TLE format');
-      },
-    ];
-
-    for (const src of sources) {
-      try {
-        const tle = await src();
-        _tleCache[norad] = { tle, ts: Date.now() };
-        return tle;
-      } catch(e) { continue; }
-    }
-    throw new Error(`TLE unavailable for NORAD ${norad}`);
+  const _tleCache={};
+  async function _fetchTLE(norad){
+    if(_tleCache[norad]&&(Date.now()-_tleCache[norad].ts)<3_600_000) return _tleCache[norad].tle;
+    const res=await fetch(`https://tle.ivanstanojevic.me/api/tle/${norad}`,{signal:AbortSignal.timeout(12000)});
+    if(!res.ok) throw new Error(`Ivan TLE HTTP ${res.status}`);
+    const j=await res.json();
+    if(!j.line1||!j.line2||j.line1.length<69||j.line2.length<69) throw new Error(`Bad TLE NORAD ${norad}`);
+    const tle={name:j.name||String(norad),line1:j.line1.trim(),line2:j.line2.trim()};
+    _tleCache[norad]={tle,ts:Date.now()};return tle;
   }
 
-  // ── SGP4-lite propagator ──────────────────────────────────────
-  function _propagate(tle, minutesOffset) {
-    try {
-      if (!tle?.line2||tle.line2.length<63) return null;
-      const l2=tle.line2;
-      const inc =parseFloat(l2.substring(8,16))*Math.PI/180;
-      const raan=parseFloat(l2.substring(17,25))*Math.PI/180;
-      const ecc =parseFloat('0.'+l2.substring(26,33).trim());
-      const argp=parseFloat(l2.substring(34,42))*Math.PI/180;
-      const ma0 =parseFloat(l2.substring(43,51))*Math.PI/180;
-      const mm  =parseFloat(l2.substring(52,63));
-      if([inc,raan,ecc,argp,ma0,mm].some(v=>!isFinite(v))) return null;
-      if(mm<=0||mm>20||ecc<0||ecc>=1) return null;
-      const mu=398600.4418,n=mm*2*Math.PI/86400,a=Math.cbrt(mu/(n*n));
-      const Ma=ma0+n*minutesOffset*60;
-      let E=Ma;
-      for(let i=0;i<8;i++) E=Ma+ecc*Math.sin(E);
-      const nu=2*Math.atan2(Math.sqrt(1+ecc)*Math.sin(E/2),Math.sqrt(1-ecc)*Math.cos(E/2));
-      const r=a*(1-ecc*Math.cos(E));
-      const xo=r*Math.cos(nu),yo=r*Math.sin(nu);
-      const cosO=Math.cos(raan),sinO=Math.sin(raan),cosI=Math.cos(inc),sinI=Math.sin(inc);
-      const cosw=Math.cos(argp),sinw=Math.sin(argp);
-      const x=(cosO*cosw-sinO*sinw*cosI)*xo+(-cosO*sinw-sinO*cosw*cosI)*yo;
-      const y=(sinO*cosw+cosO*sinw*cosI)*xo+(-sinO*sinw+cosO*cosw*cosI)*yo;
-      const z=(sinI*sinw)*xo+(sinI*cosw)*yo;
-      const nowD=Date.now()/86400000+2440587.5-2451545.0;
-      const gmst=(280.46061837+360.98564736629*nowD+minutesOffset*0.25068)*Math.PI/180;
-      const xe=x*Math.cos(gmst)+y*Math.sin(gmst),ye=-x*Math.sin(gmst)+y*Math.cos(gmst),ze=z;
-      const p=Math.sqrt(xe*xe+ye*ye);
-      const lon=Math.atan2(ye,xe)*180/Math.PI;
-      const lat=Math.atan2(ze,p*0.99330562)*180/Math.PI;
-      const altM=(Math.sqrt(xe*xe+ye*ye+ze*ze)-6371)*1000;
-      if(!isFinite(lat)||!isFinite(lon)||!isFinite(altM)) return null;
-      return {lat:Math.max(-89.9,Math.min(89.9,lat)),lon:((lon+540)%360)-180,altM:Math.max(altM,200_000)};
-    } catch(e){return null;}
+  function _getPosition(tle){
+    try{
+      const satrec=satellite.twoline2satrec(tle.line1,tle.line2);
+      const now=new Date();
+      const pv=satellite.propagate(satrec,now);
+      if(!pv.position||pv.position===true) return null;
+      const gmst=satellite.gstime(now);
+      const geo=satellite.eciToGeodetic(pv.position,gmst);
+      const lat=satellite.degreesLat(geo.latitude);
+      const lon=satellite.degreesLong(geo.longitude);
+      const altKm=geo.height;
+      if(!isFinite(lat)||!isFinite(lon)||!isFinite(altKm)||altKm<0) return null;
+      return {lat,lon,altM:altKm*1000,altKm:Math.round(altKm)};
+    }catch(e){return null;}
   }
 
-  function _buildOrbitPath(tle) {
-    const mm=parseFloat(tle.line2.substring(52,63));
-    if(!isFinite(mm)||mm<=0) return [];
-    const period=1440/mm,pts=[];
-    for(let i=0;i<=80;i++){
-      try{
-        const pos=_propagate(tle,(i/80)*period);
-        if(pos&&isFinite(pos.lat)&&isFinite(pos.lon)&&pos.altM>0)
-          pts.push(Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM));
-      }catch(e){}
-    }
-    return pts;
-  }
-
-  // ── Icons ─────────────────────────────────────────────────────
-  const _iconCache = {};
-  function _makeSatIcon(color,cat) {
-    const key=`${color}_${cat}`;
-    if(_iconCache[key]) return _iconCache[key];
-    const SZ=20,c=document.createElement('canvas');
-    c.width=c.height=SZ;
-    const ctx=c.getContext('2d');
-    ctx.shadowColor=color;ctx.shadowBlur=10;
-    ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1.2;
-    if(cat==='STATION'){
-      ctx.strokeRect(4,8,12,4);
-      ctx.fillRect(1,9,3,2);ctx.fillRect(16,9,3,2);ctx.fillRect(9,4,2,12);
-    }else if(cat==='MIL'){
-      ctx.beginPath();
-      ctx.moveTo(10,2);ctx.lineTo(18,10);ctx.lineTo(10,18);ctx.lineTo(2,10);
-      ctx.closePath();ctx.stroke();ctx.fillStyle=color+'33';ctx.fill();
-    }else if(['GPS','GLONASS','GALILEO','BEIDOU'].includes(cat)){
-      ctx.beginPath();
-      for(let i=0;i<6;i++){
-        const a=(i*60-90)*Math.PI/180;
-        i===0?ctx.moveTo(10+8*Math.cos(a),10+8*Math.sin(a)):ctx.lineTo(10+8*Math.cos(a),10+8*Math.sin(a));
+  function _buildOrbitPath(tle){
+    try{
+      const satrec=satellite.twoline2satrec(tle.line1,tle.line2);
+      const mm=satrec.no*(1440/(2*Math.PI));
+      if(mm<=0||mm>20) return [];
+      const periodMin=1440/mm,pts=[];
+      for(let i=0;i<=90;i++){
+        const t=new Date(Date.now()+(i/90)*periodMin*60*1000);
+        const pv=satellite.propagate(satrec,t);
+        if(!pv.position||pv.position===true) continue;
+        const gmst=satellite.gstime(t);
+        const geo=satellite.eciToGeodetic(pv.position,gmst);
+        const lat=satellite.degreesLat(geo.latitude);
+        const lon=satellite.degreesLong(geo.longitude);
+        const altM=geo.height*1000;
+        if(isFinite(lat)&&isFinite(lon)&&isFinite(altM)&&altM>0)
+          pts.push(Cesium.Cartesian3.fromDegrees(lon,lat,altM));
       }
-      ctx.closePath();ctx.stroke();
-    }else{
-      ctx.beginPath();ctx.arc(10,10,5,0,Math.PI*2);ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(10,2);ctx.lineTo(10,6);ctx.moveTo(10,14);ctx.lineTo(10,18);
-      ctx.moveTo(2,10);ctx.lineTo(6,10);ctx.moveTo(14,10);ctx.lineTo(18,10);
-      ctx.stroke();
-    }
-    _iconCache[key]=c; return c;
+      return pts;
+    }catch(e){return [];}
   }
 
-  const _active=[];
-  let _ticker=null;
+  const _iconCache={};
+  function _makeSatIcon(color,cat){
+    const key=`${color}_${cat}`;if(_iconCache[key]) return _iconCache[key];
+    const SZ=20,c=document.createElement('canvas');c.width=c.height=SZ;
+    const ctx=c.getContext('2d');
+    ctx.shadowColor=color;ctx.shadowBlur=10;ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1.3;
+    if(cat==='STATION'){ctx.strokeRect(4,8,12,4);ctx.fillRect(1,9,3,2);ctx.fillRect(16,9,3,2);ctx.fillRect(9,4,2,12);}
+    else if(cat==='MIL'){ctx.beginPath();ctx.moveTo(10,2);ctx.lineTo(18,10);ctx.lineTo(10,18);ctx.lineTo(2,10);ctx.closePath();ctx.stroke();ctx.fillStyle=color+'33';ctx.fill();}
+    else if(['GPS','GLONASS','GALILEO','BEIDOU'].includes(cat)){ctx.beginPath();for(let i=0;i<6;i++){const a=(i*60-90)*Math.PI/180;i===0?ctx.moveTo(10+8*Math.cos(a),10+8*Math.sin(a)):ctx.lineTo(10+8*Math.cos(a),10+8*Math.sin(a));}ctx.closePath();ctx.stroke();}
+    else{ctx.beginPath();ctx.arc(10,10,5,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(10,2);ctx.lineTo(10,6);ctx.moveTo(10,14);ctx.lineTo(10,18);ctx.moveTo(2,10);ctx.lineTo(6,10);ctx.moveTo(14,10);ctx.lineTo(18,10);ctx.stroke();}
+    _iconCache[key]=c;return c;
+  }
 
-  function _tick() {
-    _active.forEach(sat=>{
+  const _sats=[];let _ticker=null;
+
+  function _tick(){
+    _sats.forEach(sat=>{
       if(!sat.tle||!sat.entity) return;
-      const pos=_propagate(sat.tle,0);
-      if(!pos||!isFinite(pos.lat)||!isFinite(pos.lon)||!isFinite(pos.altM)) return;
+      const pos=_getPosition(sat.tle);if(!pos) return;
       try{
         sat.entity.position=Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM);
-        if(sat.entity._oeData){
-          sat.entity._oeData.lat=pos.lat;
-          sat.entity._oeData.lon=pos.lon;
-          sat.entity._oeData.altM=pos.altM;
-          sat.entity._oeData.altKm=Math.round(pos.altM/1000);
-        }
+        if(sat.entity._oeData){sat.entity._oeData.lat=pos.lat;sat.entity._oeData.lon=pos.lon;sat.entity._oeData.altM=pos.altM;sat.entity._oeData.altKm=pos.altKm;}
       }catch(e){}
     });
   }
 
-  // ── Detail renderer ───────────────────────────────────────────
-  DETAIL_RENDERERS['satellite'] = (d) => {
+  DETAIL_RENDERERS['satellite']=(d)=>{
     const col=d.color||'#44ffcc';
-    const altStr=d.altKm?`${d.altKm.toLocaleString()} km`:'—';
-    const catBadge={
-      STATION:'🛸 SPACE STATION',GPS:'🔵 GPS NAV',GLONASS:'🔵 GLONASS',
-      GALILEO:'🔵 GALILEO',BEIDOU:'🔵 BEIDOU',WEATHER:'🌤 WEATHER',
-      EO:'📷 EARTH OBS',MIL:'🔴 MILITARY',GEO:'🌍 GEO',
-      IRIDIUM:'📡 IRIDIUM',AMATEUR:'📻 AMATEUR',
-    }[d.cat]||`🛰 ${d.cat||'SATELLITE'}`;
-    const incStr=d.incDeg?`${d.incDeg}°`:'—';
-    const perStr=d.periodMin?`${d.periodMin} min`:'—';
+    const badge={STATION:'🛸 SPACE STATION',GPS:'🔵 GPS NAV',GLONASS:'🔵 GLONASS',GALILEO:'🔵 GALILEO',BEIDOU:'🔵 BEIDOU',WEATHER:'🌤 WEATHER',EO:'📷 EARTH OBS',MIL:'🔴 MILITARY',GEO:'🌍 GEO',ONEWEB:'📡 ONEWEB',AMATEUR:'📻 AMATEUR'}[d.cat]||`🛰 ${d.cat||'SAT'}`;
     return `
       <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
-      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${catBadge}</span>
+      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${badge}</span>
       <div class="detail-grid" style="margin-top:6px">
         <div><div class="dg-cell-label">NORAD ID</div><div class="dg-cell-value">${d.norad||'—'}</div></div>
-        <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value" style="color:${col}">${altStr}</div></div>
+        <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value" style="color:${col}">${d.altKm?d.altKm.toLocaleString()+' km':'—'}</div></div>
         <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat!=null?d.lat.toFixed(3)+'°':'—'}</div></div>
         <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon!=null?d.lon.toFixed(3)+'°':'—'}</div></div>
-        <div><div class="dg-cell-label">Inclination</div><div class="dg-cell-value">${incStr}</div></div>
-        <div><div class="dg-cell-label">Period</div><div class="dg-cell-value">${perStr}</div></div>
         <div><div class="dg-cell-label">Category</div><div class="dg-cell-value">${d.cat||'—'}</div></div>
-        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">Celestrak TLE</div></div>
+        <div><div class="dg-cell-label">Propagator</div><div class="dg-cell-value">satellite.js SGP4</div></div>
       </div>`;
   };
 
-  // ── Main refresh — staggered, progressive render ──────────────
-  LAYER_REGISTRY.SATELLITE.refresh = async function() {
+  LAYER_REGISTRY.SATELLITE.refresh=async function(){
     UI.setStatus('satellite','FETCHING','warn');
-    LOG.add(`[SAT] Loading ${SAT_CATALOG.length} satellites (staggered)...`,'sys');
-
+    LOG.add(`[SAT] Loading ${SAT_CATALOG.length} satellites...`,'sys');
     const layer=LAYER_REGISTRY.SATELLITE;
-    layer.entities.entities.removeAll();
-    _active.length=0;
+    layer.entities.entities.removeAll();_sats.length=0;
     if(_ticker){clearInterval(_ticker);_ticker=null;}
-
-    // Deduplicate NORAD IDs
     const seen=new Set();
-    const unique=SAT_CATALOG.filter(m=>{ if(seen.has(m.norad)) return false; seen.add(m.norad); return true; });
-
+    const unique=SAT_CATALOG.filter(m=>{if(seen.has(m.norad))return false;seen.add(m.norad);return true;});
     let rendered=0;
     for(const meta of unique){
       try{
         const tle=await _fetchTLE(meta.norad);
-        const pos=_propagate(tle,0);
-        if(!pos||!isFinite(pos.lat)||!isFinite(pos.lon)||!isFinite(pos.altM)) throw new Error('Bad position');
-
-        // Orbital path for priority-1
+        const pos=_getPosition(tle);
+        if(!pos) throw new Error('SGP4 null');
         if(meta.priority===1){
-          const pathPts=_buildOrbitPath(tle);
-          if(pathPts.length>=4){
-            layer.entities.entities.add({
-              polyline:{
-                positions:pathPts,width:1.5,
-                material:new Cesium.PolylineGlowMaterialProperty({
-                  glowPower:0.2,
-                  color:Cesium.Color.fromCssColorString(meta.color).withAlpha(0.5),
-                }),
-                clampToGround:false,arcType:Cesium.ArcType.NONE,
-              },
-            });
-          }
+          const pts=_buildOrbitPath(tle);
+          if(pts.length>=4){layer.entities.entities.add({polyline:{positions:pts,width:1.5,material:new Cesium.PolylineGlowMaterialProperty({glowPower:0.2,color:Cesium.Color.fromCssColorString(meta.color).withAlpha(0.5)}),clampToGround:false,arcType:Cesium.ArcType.NONE}});}
         }
-
-        const icon=_makeSatIcon(meta.color,meta.cat);
-        const sz=meta.priority===1?20:12;
-        const altKm=Math.round(pos.altM/1000);
-        const incDeg=parseFloat(tle.line2.substring(8,16));
-        const mmVal=parseFloat(tle.line2.substring(52,63));
-        const periodMin=isFinite(mmVal)&&mmVal>0?Math.round(1440/mmVal):null;
-
+        const icon=_makeSatIcon(meta.color,meta.cat);const sz=meta.priority===1?20:13;
         const entity=layer.entities.entities.add({
           position:Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM),
-          // Point — always visible at any zoom level
-          point:{
-            pixelSize:meta.priority===1?7:5,
-            color:Cesium.Color.fromCssColorString(meta.color),
-            outlineColor:Cesium.Color.BLACK,outlineWidth:1,
-            scaleByDistance:new Cesium.NearFarScalar(500_000,1.5,30_000_000,1.0),
-            disableDepthTestDistance:500,
-          },
-          billboard:{
-            image:icon,width:sz,height:sz,
-            verticalOrigin:Cesium.VerticalOrigin.CENTER,
-            scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,8_000_000,0.0),
-            disableDepthTestDistance:500,
-          },
-          label:{
-            text:meta.name,font:'9px Share Tech Mono, monospace',
-            fillColor:Cesium.Color.fromCssColorString(meta.color),
-            outlineColor:Cesium.Color.BLACK,outlineWidth:2,
-            style:Cesium.LabelStyle.FILL_AND_OUTLINE,
-            pixelOffset:new Cesium.Cartesian2(0,-14),
-            scaleByDistance:meta.priority===1
-              ?new Cesium.NearFarScalar(500_000,1.0,10_000_000,0.0)
-              :new Cesium.NearFarScalar(500_000,0.8,3_000_000,0.0),
-            disableDepthTestDistance:500,
-            showBackground:meta.priority===1,
-            backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),
-            backgroundPadding:new Cesium.Cartesian2(3,2),
-          },
+          point:{pixelSize:meta.priority===1?7:5,color:Cesium.Color.fromCssColorString(meta.color),outlineColor:Cesium.Color.BLACK,outlineWidth:1,scaleByDistance:new Cesium.NearFarScalar(500_000,1.5,30_000_000,1.0),disableDepthTestDistance:500},
+          billboard:{image:icon,width:sz,height:sz,verticalOrigin:Cesium.VerticalOrigin.CENTER,scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,8_000_000,0.0),disableDepthTestDistance:500},
+          label:{text:meta.name,font:'9px Share Tech Mono, monospace',fillColor:Cesium.Color.fromCssColorString(meta.color),outlineColor:Cesium.Color.BLACK,outlineWidth:2,style:Cesium.LabelStyle.FILL_AND_OUTLINE,pixelOffset:new Cesium.Cartesian2(0,-14),scaleByDistance:meta.priority===1?new Cesium.NearFarScalar(500_000,1.0,10_000_000,0.0):new Cesium.NearFarScalar(500_000,0.8,3_000_000,0.0),disableDepthTestDistance:500,showBackground:meta.priority===1,backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),backgroundPadding:new Cesium.Cartesian2(3,2)},
         });
-
-        entity._oeData={...meta,...pos,type:'satellite',classification:meta.cat,
-          altKm,incDeg:isFinite(incDeg)?incDeg.toFixed(2):null,periodMin};
-        _active.push({tle,entity,meta});
-        rendered++;
-
-        // Progressive status update
-        layer.count=rendered;
-        LAYER_REGISTRY._sync('SATELLITE');
+        entity._oeData={...meta,...pos,type:'satellite',classification:meta.cat};
+        _sats.push({tle,entity,meta});rendered++;
+        layer.count=rendered;LAYER_REGISTRY._sync('SATELLITE');
         document.getElementById('sb-sats').innerHTML=`SATS <span>${rendered}</span>`;
         UI.setStatus('satellite',`LIVE · ${rendered}`,'ok');
-        LOG.add(`[SAT] ✓ ${meta.name} @ ${altKm}km`,'sat');
-
-      }catch(e){
-        LOG.add(`[SAT] ${meta.name} failed — ${e.message}`,'warn');
-      }
-      // 500ms stagger — respects rate limits, TLE proxy is fast
-      await new Promise(r=>setTimeout(r,500));
+        LOG.add(`[SAT] ✓ ${meta.name} @ ${pos.altKm}km`,'sat');
+      }catch(e){LOG.add(`[SAT] ✗ ${meta.name} — ${e.message}`,'warn');}
+      await new Promise(r=>setTimeout(r,600));
     }
-
-    if(rendered===0){
-      LOG.add('[SAT] All TLE fetches failed','alrt');
-      UI.setStatus('satellite','OFFLINE','err');
-      return;
-    }
+    if(rendered===0){UI.setStatus('satellite','OFFLINE','err');return;}
     _ticker=setInterval(_tick,5000);
-    LOG.add(`[SAT] ${rendered} satellites active`,'sat');
+    LOG.add(`[SAT] ${rendered} active — SGP4 5s tick`,'sat');
   };
 
-  LOG.add('[SAT] v3.1 module — Ivan TLE proxy primary','sat');
+  LOG.add('[SAT] v4 — satellite.js SGP4 + Ivan TLE','sat');
   UI.setStatus('satellite','LOADING','warn');
   setTimeout(()=>LAYER_REGISTRY.SATELLITE.refresh(),3200);
   return {refresh:()=>LAYER_REGISTRY.SATELLITE.refresh()};
@@ -2893,100 +2518,46 @@ const SATELLITE_MODULE = (() => {
 })(); // END SATELLITE_MODULE
 
 
-
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  ENVIRONMENT_MODULE  —  Phase 2                             ║
-// ║  FIRMS   : NASA VIIRS 24h global fire detections            ║
-// ║  WEATHER : RainViewer live precipitation radar overlay      ║
+// ║  ENVIRONMENT_MODULE  —  v4                                  ║
+// ║  FIRES  : NASA EONET API (native CORS, no proxy)            ║
+// ║  WEATHER: RainViewer (native CORS, tile-based overlay)      ║
 // ╚══════════════════════════════════════════════════════════════╝
 const ENVIRONMENT_MODULE = (() => {
 
-  let _rainLayer = null;
+  let _rainLayer=null;
+  const EONET_URL='https://eonet.gsfc.nasa.gov/api/v3/events?category=wildfires&status=open&limit=500&days=3';
 
-  // ── NASA EONET — natural events API (proper CORS headers) ─────
-  // Replaced FIRMS CSV (CORS blocked) with EONET JSON API
-  const EONET_URL = 'https://eonet.gsfc.nasa.gov/api/v3/events?category=wildfires&status=open&limit=500&days=3';
-  // FIRMS via corsproxy as backup
-  const FIRMS_URL = 'https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_Global_24h.csv';
-
-  async function _fetchFiresEONET() {
-    const res = await fetch(EONET_URL, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`EONET HTTP ${res.status}`);
-    const json = await res.json();
-    if (!json.events?.length) throw new Error('EONET: no fire events');
-    const fires = [];
-    json.events.forEach(evt => {
-      evt.geometry?.forEach(g => {
-        if (g.type==='Point' && g.coordinates?.length>=2) {
-          fires.push({
-            lon:  g.coordinates[0],
-            lat:  g.coordinates[1],
-            frp:  50,  // EONET doesn't give FRP — use medium intensity
-            conf: 90,
-            date: g.date?.slice(0,10) || '',
-            name: evt.title,
-          });
-        }
+  async function _fetchFires(){
+    const res=await fetch(EONET_URL,{signal:AbortSignal.timeout(15000)});
+    if(!res.ok) throw new Error(`EONET HTTP ${res.status}`);
+    const json=await res.json();
+    if(!json.events?.length) throw new Error('EONET: no events');
+    const fires=[];
+    json.events.forEach(evt=>{
+      evt.geometry?.forEach(g=>{
+        if(g.type==='Point'&&g.coordinates?.length>=2)
+          fires.push({lon:g.coordinates[0],lat:g.coordinates[1],frp:50,conf:90,date:g.date?.slice(0,10)||'',name:evt.title});
       });
     });
     return fires;
   }
 
-  async function _fetchFirmsFallback() {
-    // Try FIRMS via corsproxy — targeted only for this one blocked source
-    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(FIRMS_URL)}`;
-    const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
-    if (!res.ok) throw new Error(`FIRMS proxy HTTP ${res.status}`);
-    const csv = await res.text();
-    if (!csv||csv.length<100) throw new Error('FIRMS: empty');
-    const lines=csv.trim().split('\n');
-    const header=lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
-    const iLat=header.indexOf('latitude'),iLon=header.indexOf('longitude');
-    const iConf=header.indexOf('confidence'),iFrp=header.indexOf('frp');
-    const iDate=header.indexOf('acq_date');
-    if(iLat<0||iLon<0) throw new Error('FIRMS: bad CSV format');
-    return lines.slice(1).filter(l=>l.trim()).map(l=>{
-      const c=l.split(',');
-      return {lat:parseFloat(c[iLat]),lon:parseFloat(c[iLon]),
-              conf:iConf>=0?parseFloat(c[iConf])||50:50,
-              frp:iFrp>=0?parseFloat(c[iFrp])||0:0,
-              date:iDate>=0?c[iDate]:''};
-    }).filter(f=>isFinite(f.lat)&&isFinite(f.lon)&&
-               Math.abs(f.lat)<=90&&Math.abs(f.lon)<=180&&f.conf>=60);
-  }
-
-  async function _fetchFires() {
-    // Try EONET first (native CORS), fall back to FIRMS via proxy
-    try {
-      const fires = await _fetchFiresEONET();
-      LOG.add(`[FIRMS] EONET: ${fires.length} wildfire events`,'warn');
-      return fires;
-    } catch(e) {
-      LOG.add(`[FIRMS] EONET failed (${e.message}) — trying FIRMS proxy`,'warn');
-      return await _fetchFirmsFallback();
-    }
-  }
-
-  function _makeFireIcon(frp) {
-    const inten=Math.min((frp||0)/80,1.0);
-    const sz=Math.round(14+inten*14);
-    const c=document.createElement('canvas');
-    c.width=c.height=sz;
-    const ctx=c.getContext('2d');
-    const cx=sz/2;
+  function _makeFireIcon(frp){
+    const inten=Math.min((frp||0)/80,1.0);const sz=Math.round(14+inten*14);
+    const c=document.createElement('canvas');c.width=c.height=sz;
+    const ctx=c.getContext('2d');const cx=sz/2;
     const g=ctx.createRadialGradient(cx,cx,0,cx,cx,cx);
     g.addColorStop(0,`rgba(255,120,0,${0.7+inten*0.25})`);
     g.addColorStop(0.5,`rgba(255,50,0,${0.4+inten*0.2})`);
     g.addColorStop(1,'rgba(200,0,0,0)');
-    ctx.fillStyle=g;
-    ctx.beginPath();ctx.arc(cx,cx,cx,0,Math.PI*2);ctx.fill();
-    ctx.shadowColor='#ffee00';ctx.shadowBlur=8;
-    ctx.fillStyle='#ffcc00';
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cx,cx,0,Math.PI*2);ctx.fill();
+    ctx.shadowColor='#ffee00';ctx.shadowBlur=8;ctx.fillStyle='#ffcc00';
     ctx.beginPath();ctx.arc(cx,cx,2+inten*2,0,Math.PI*2);ctx.fill();
     return c;
   }
 
-  async function _renderFires(fires) {
+  async function _renderFires(fires){
     const layer=LAYER_REGISTRY.ENVIRONMENT;
     const toRemove=layer.entities.entities.values.filter(e=>e._oeType==='fire');
     toRemove.forEach(e=>layer.entities.entities.remove(e));
@@ -2995,45 +2566,34 @@ const ENVIRONMENT_MODULE = (() => {
       const icon=_makeFireIcon(f.frp);
       const entity=layer.entities.entities.add({
         position:Cesium.Cartesian3.fromDegrees(f.lon,f.lat,10),
-        billboard:{
-          image:icon,width:icon.width,height:icon.height,
-          verticalOrigin:Cesium.VerticalOrigin.CENTER,
+        billboard:{image:icon,width:icon.width,height:icon.height,verticalOrigin:Cesium.VerticalOrigin.CENTER,
           scaleByDistance:new Cesium.NearFarScalar(5_000,2.5,2_000_000,0.4),
           translucencyByDistance:new Cesium.NearFarScalar(50_000,1.0,3_000_000,0.15),
-          disableDepthTestDistance:500,
-        },
+          disableDepthTestDistance:500},
       });
       entity._oeType='fire';
-      entity._oeData={...f,type:'fire',name:f.name||'THERMAL HOTSPOT',classification:'FIRE'};
+      entity._oeData={...f,type:'fire',name:f.name||'WILDFIRE',classification:'FIRE'};
     });
-    layer.count=capped.length;
-    LAYER_REGISTRY._sync('ENVIRONMENT');
+    layer.count=capped.length;LAYER_REGISTRY._sync('ENVIRONMENT');
     UI.setStatus('fires',`LIVE · ${capped.length}`,'ok');
     document.getElementById('sb-fires').innerHTML=`FIRES <span>${capped.length}</span>`;
-    LOG.add(`[FIRMS] ${capped.length} fire hotspots plotted`,'warn');
+    LOG.add(`[FIRES] ${capped.length} active wildfires — NASA EONET`,'warn');
   }
 
-  // ── RainViewer — JSON API has CORS, tile URLs are direct ─────
-  async function _loadWeather() {
+  async function _loadWeather(){
     UI.setStatus('weather','FETCHING','warn');
-    try {
-      // RainViewer's JSON API endpoint has proper CORS headers
-      const res = await fetch('https://api.rainviewer.com/public/weather-maps.json',
-                              { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) throw new Error(`RainViewer HTTP ${res.status}`);
+    try{
+      const res=await fetch('https://api.rainviewer.com/public/weather-maps.json',{signal:AbortSignal.timeout(8000)});
+      if(!res.ok) throw new Error(`RainViewer HTTP ${res.status}`);
       const data=await res.json();
-      const frames=data.radar?.past;
-      if (!frames?.length) throw new Error('RainViewer: no frames');
+      const frames=data.radar?.past;if(!frames?.length) throw new Error('no frames');
       const latest=frames[frames.length-1];
-      const host=data.host;
       if(_rainLayer){scene.imageryLayers.remove(_rainLayer,true);_rainLayer=null;}
-      const provider=new Cesium.UrlTemplateImageryProvider({
-        url:`${host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`,
+      _rainLayer=scene.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+        url:`${data.host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`,
         minimumLevel:1,maximumLevel:6,credit:'RainViewer.com',
-      });
-      _rainLayer=scene.imageryLayers.addImageryProvider(provider);
-      _rainLayer.alpha=0.45;
-      _rainLayer.show=LAYER_REGISTRY.ENVIRONMENT.enabled;
+      }));
+      _rainLayer.alpha=0.45;_rainLayer.show=LAYER_REGISTRY.ENVIRONMENT.enabled;
       _rainLayer.brightness=1.4;_rainLayer.saturation=1.2;
       const ts=new Date(latest.time*1000).toISOString().slice(11,16);
       UI.setStatus('weather',`LIVE · ${ts}Z`,'ok');
@@ -3044,45 +2604,33 @@ const ENVIRONMENT_MODULE = (() => {
     }
   }
 
-  DETAIL_RENDERERS['fire'] = (d) => `
-    <div class="detail-name" style="color:var(--orange)">🔥 ${d.name||'THERMAL HOTSPOT'}</div>
-    <span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,100,0,0.4);background:rgba(255,100,0,0.08)">
-      ⚠ ACTIVE FIRE — NASA
-    </span>
+  DETAIL_RENDERERS['fire']=(d)=>`
+    <div class="detail-name" style="color:var(--orange)">🔥 ${d.name||'WILDFIRE'}</div>
+    <span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,100,0,0.4);background:rgba(255,100,0,0.08)">⚠ ACTIVE FIRE — NASA EONET</span>
     <div class="detail-grid" style="margin-top:6px">
       <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat?.toFixed(4)}°</div></div>
       <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon?.toFixed(4)}°</div></div>
-      <div><div class="dg-cell-label">FRP</div><div class="dg-cell-value">${d.frp?d.frp.toFixed(1)+' MW':'—'}</div></div>
-      <div><div class="dg-cell-label">Confidence</div><div class="dg-cell-value">${d.conf?d.conf+'%':'—'}</div></div>
       <div><div class="dg-cell-label">Detected</div><div class="dg-cell-value">${d.date||'—'}</div></div>
-      <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">NASA EONET / FIRMS</div></div>
+      <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">NASA EONET API</div></div>
     </div>`;
 
   const _origToggle=LAYER_REGISTRY.toggle.bind(LAYER_REGISTRY);
-  LAYER_REGISTRY.toggle=function(id){
-    _origToggle(id);
-    if(id==='ENVIRONMENT'&&_rainLayer) _rainLayer.show=this.ENVIRONMENT.enabled;
-  };
+  LAYER_REGISTRY.toggle=function(id){_origToggle(id);if(id==='ENVIRONMENT'&&_rainLayer)_rainLayer.show=this.ENVIRONMENT.enabled;};
 
-  LAYER_REGISTRY.ENVIRONMENT.refresh = async function() {
-    LOG.add('[ENV] Polling NASA EONET + RainViewer...','sys');
+  LAYER_REGISTRY.ENVIRONMENT.refresh=async function(){
+    LOG.add('[ENV] Polling EONET + RainViewer...','sys');
     await Promise.allSettled([
-      _fetchFires().then(_renderFires).catch(e=>{
-        LOG.add(`[FIRMS] Failed — ${e.message}`,'warn');
-        UI.setStatus('fires','OFFLINE','err');
-      }),
+      _fetchFires().then(_renderFires).catch(e=>{LOG.add(`[FIRES] EONET failed — ${e.message}`,'warn');UI.setStatus('fires','OFFLINE','err');}),
       _loadWeather(),
     ]);
   };
 
-  LOG.add('[ENV] v3.1 module — EONET fires + RainViewer','sys');
-  UI.setStatus('fires','LOADING','warn');
-  UI.setStatus('weather','LOADING','warn');
+  LOG.add('[ENV] v4 — EONET + RainViewer','sys');
+  UI.setStatus('fires','LOADING','warn');UI.setStatus('weather','LOADING','warn');
   setTimeout(()=>LAYER_REGISTRY.ENVIRONMENT.refresh(),4800);
   return {refresh:()=>LAYER_REGISTRY.ENVIRONMENT.refresh()};
 
 })(); // END ENVIRONMENT_MODULE
-
 </script>
 
 </body>

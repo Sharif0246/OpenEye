@@ -1946,8 +1946,8 @@ const AVIATION_MODULE = (() => {
 
   // 1. ADSB.lol — free, open CORS, no auth, global coverage
   async function _fetchADSBLol() {
-    // Vercel proxy — server-to-server, no CORS block
-    // Replace VERCEL_URL with your actual Vercel deployment URL
+    // Vercel proxy — calls RapidAPI ADS-B Exchange server-to-server
+    // 8 regional hubs × 250NM + military feed = global coverage
     const VERCEL_URL = 'https://open-eye-iota.vercel.app';
     const res = await fetch(`${VERCEL_URL}/api/adsb`,
       { signal: AbortSignal.timeout(20000) });
@@ -2609,7 +2609,7 @@ const SATELLITE_MODULE = (() => {
         const icon=_makeSatIcon(meta.color,meta.cat);const sz=meta.priority===1?20:13;
         const entity=layer.entities.entities.add({
           position:Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM),
-          point:{pixelSize:meta.priority===1?7:5,color:Cesium.Color.fromCssColorString(meta.color),outlineColor:Cesium.Color.BLACK,outlineWidth:1,scaleByDistance:new Cesium.NearFarScalar(500_000,1.5,30_000_000,1.0),disableDepthTestDistance:500},
+          point:{pixelSize:meta.priority===1?7:5,color:Cesium.Color.fromCssColorString(meta.color),outlineColor:Cesium.Color.BLACK,outlineWidth:1,scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,30_000_000,0.3),disableDepthTestDistance:500},
           billboard:{image:icon,width:sz,height:sz,verticalOrigin:Cesium.VerticalOrigin.CENTER,scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,8_000_000,0.0),disableDepthTestDistance:500},
           label:{text:meta.name,font:'9px Share Tech Mono, monospace',fillColor:Cesium.Color.fromCssColorString(meta.color),outlineColor:Cesium.Color.BLACK,outlineWidth:2,style:Cesium.LabelStyle.FILL_AND_OUTLINE,pixelOffset:new Cesium.Cartesian2(0,-14),scaleByDistance:meta.priority===1?new Cesium.NearFarScalar(500_000,1.0,10_000_000,0.0):new Cesium.NearFarScalar(500_000,0.8,3_000_000,0.0),disableDepthTestDistance:500,showBackground:meta.priority===1,backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),backgroundPadding:new Cesium.Cartesian2(3,2)},
         });

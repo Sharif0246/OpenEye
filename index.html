@@ -1946,7 +1946,10 @@ const AVIATION_MODULE = (() => {
 
   // 1. ADSB.lol — free, open CORS, no auth, global coverage
   async function _fetchADSBLol() {
-    const res = await fetch('https://api.adsb.lol/v2/all',
+    // Vercel proxy — server-to-server, no CORS block
+    // Replace VERCEL_URL with your actual Vercel deployment URL
+    const VERCEL_URL = 'https://open-eye-iota.vercel.app';
+    const res = await fetch(`${VERCEL_URL}/api/adsb`,
       { signal: AbortSignal.timeout(20000) });
     if (!res.ok) throw new Error(`ADSB.lol HTTP ${res.status}`);
     const json = await res.json();

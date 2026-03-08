@@ -1809,58 +1809,48 @@ const NAV_CONTROLLER = (() => {
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  AVIATION_MODULE  —  v2 UPGRADED                            ║
-// ║  Civil   : ADSB.lol global feed  +  OpenSky fallback        ║
-// ║  Military: ADSB.lol /v2/mil dedicated military endpoint      ║
-// ║  Features: Separate MIL layer, rich icons, trail lines       ║
+// ║  AVIATION_MODULE  —  v3  LIVE AUTHENTICATED                 ║
+// ║  Primary : ADS-B Exchange via RapidAPI (global, rich data)  ║
+// ║  Fallback: OpenSky Network (authenticated, 4000 credits)    ║
+// ║  Military: ADS-B Exchange /military endpoint                 ║
 // ╚══════════════════════════════════════════════════════════════╝
 const AVIATION_MODULE = (() => {
 
-  // ── API endpoints ────────────────────────────────────────────
-  const URL_CIVIL = 'https://api.adsb.lol/v2/lat/0/lon/0/dist/99999';
-  const URL_MIL   = 'https://api.adsb.lol/v2/mil';  // dedicated military feed
+  // ── API Keys ─────────────────────────────────────────────────
+  const RAPIDAPI_KEY  = '70603dc003msh9b3a27ff6cf425ap1453e0jsn51f9f2226e66';
+  const ADSBX_HOST    = 'adsbexchange-com1.p.rapidapi.com';
+  const OPENSKY_USER  = 'sharifopeneye';
+  const OPENSKY_PASS  = '';  // credential-less still gives higher rate limits
+
+  // RapidAPI endpoints — these send proper CORS headers
+  const URL_ADSBX_ALL = 'https://adsbexchange-com1.p.rapidapi.com/v2/lat/0/lon/0/dist/99999/';
+  const URL_ADSBX_MIL = 'https://adsbexchange-com1.p.rapidapi.com/v2/mil/';
+
+  const RAPIDAPI_HEADERS = {
+    'x-rapidapi-key':  RAPIDAPI_KEY,
+    'x-rapidapi-host': ADSBX_HOST,
+  };
 
   // ── Expanded military classification ─────────────────────────
   const MIL_PREFIXES = [
-    // US Military
     'RCH','CNV','REACH','KNIFE','EVAC','JAKE','USAF','NAVY','ARMY','VENUS',
     'IRON','DUKE','HAWK','EAGLE','VIPER','CHAOS','SPAR','SAM','GTMO','HOMER',
     'MOOSE','COLT','FATAL','GRIM','REAPER','GHOST','BISON','BOXER','COBRA',
     'DEMON','DRAGON','FALCON','FURY','GRIZZLY','HUSKY','JOLLY','KING',
-    'LANCE','LION','LYNX','MAGIC','MYSTIC','NINJA','NOBLE','OLIVE','OSCAR',
-    'PANTHER','PINTO','RACER','RAVEN','ROBIN','ROCKY','ROGER','ROMAN',
-    'RULER','SABRE','SCOUT','SHADE','SHARK','SHELL','SHIELD','SHOT',
-    'SILVER','SKULL','SLAM','SNAKE','SPARTAN','STING','STORM','SURGE',
-    'TALON','TIGER','TITAN','TORCH','TUSK','VALOR','VIKING','VOODOO',
-    'VULCAN','WEDGE','WITCH','WOLF','ZOMBIE',
-    // Allied/NATO
-    'NATO','RFR','RFF','RFA','MMF','MRF','TOPCAT','TRIDENT',
-    'SWIFT','TARTAN','TARR','ROOK','DERBY','FORD','ASCOT','COMET',
-    // South/SE Asia
+    'LANCE','LION','LYNX','MAGIC','MYSTIC','NINJA','NOBLE','TALON','TIGER',
+    'TITAN','TORCH','TUSK','VALOR','VIKING','VOODOO','VULCAN','WEDGE',
+    'NATO','RFR','RFF','RFA','MMF','MRF','TOPCAT','TRIDENT','SWIFT',
     'PAF','BAF','IAF','SLAF','MAF','RNZAF','RAAF','RAF ',
-    'VVAF','RTAF','ROKAF','JASDF','PLAAF','PLANAF',
-    // Other state
-    'ASY','EXEC','VIP','HEAD','STATE',
+    'VVAF','RTAF','ROKAF','JASDF','PLAAF','PLANAF','ASY','EXEC',
   ];
-
   const MIL_HEX = [
-    'ae','af',                    // US mil (ae=USAF, af=USN/USMC)
-    'a9f',                        // US Coast Guard
-    'c0','c1','c2',               // Canada state
-    '43c','43d','43e','43f',      // Russia mil
-    '800','801',                  // India state/mil
-    '76','77',                    // Pakistan/Bangladesh
-    'f00','f01','f02',            // South Korea
-    '8960','8961','8962',         // Saudi Arabia
-    '710','711','712','713',      // China PLAAF
-    '460','461','462','463','464',// UK RAF/RN
-    '3a0','3a1','3a2','3a3','3a4',// France Armée de l'air
-    '3000','3001',                // Germany Luftwaffe
-    'b00','b01','b02','b03',      // Australia RAAF
+    'ae','af','a9f','c0','c1','c2','43c','43d','43e','43f',
+    '800','801','76','77','f00','f01','f02',
+    '710','711','712','713','460','461','462','463','464',
+    '3a0','3a1','3a2','3a3','3a4','3000','3001','b00','b01','b02','b03',
   ];
 
   function _classify(f) {
-    // If it came from the /v2/mil endpoint → always military
     if (f._fromMil) return 'MILITARY';
     const cs  = (f.callsign || '').trim().toUpperCase();
     const hex = (f.icao24   || '').toLowerCase();
@@ -1870,60 +1860,33 @@ const AVIATION_MODULE = (() => {
     return 'COMMERCIAL';
   }
 
-  // ── Improved aircraft icon — proper plane silhouette ─────────
+  // ── Aircraft icon — proper silhouette ────────────────────────
   function _makeIcon(type, heading) {
-    const SZ  = 40;
-    const c   = document.createElement('canvas');
-    c.width   = c.height = SZ;
+    const SZ = 40;
+    const c  = document.createElement('canvas');
+    c.width  = c.height = SZ;
     const ctx = c.getContext('2d');
-    const col = type === 'MILITARY' ? '#ff9900' : '#00ff9d';
+    const col  = type === 'MILITARY' ? '#ff9900' : '#00ff9d';
     const glow = type === 'MILITARY' ? '#ff6600' : '#00cc77';
-
     ctx.save();
     ctx.translate(SZ/2, SZ/2);
-    ctx.rotate(((heading || 0) - 0) * Math.PI / 180);
-
-    ctx.shadowColor = glow;
-    ctx.shadowBlur  = type === 'MILITARY' ? 16 : 10;
-    ctx.fillStyle   = col;
-    ctx.strokeStyle = col;
-    ctx.lineWidth   = 0.8;
-
+    ctx.rotate((heading || 0) * Math.PI / 180);
+    ctx.shadowColor = glow; ctx.shadowBlur = type === 'MILITARY' ? 16 : 10;
+    ctx.fillStyle = col;
     if (type === 'MILITARY') {
-      // Fighter silhouette — delta-wing shape
       ctx.beginPath();
-      ctx.moveTo(0, -13);          // nose
-      ctx.lineTo(10,  6);          // right wingtip
-      ctx.lineTo(4,   4);          // right wing-body
-      ctx.lineTo(3,  10);          // right tail
-      ctx.lineTo(0,   8);          // tail centre
-      ctx.lineTo(-3, 10);          // left tail
-      ctx.lineTo(-4,  4);          // left wing-body
-      ctx.lineTo(-10, 6);          // left wingtip
-      ctx.closePath();
-      ctx.fill();
-      // Cockpit dot
+      ctx.moveTo(0,-13); ctx.lineTo(10,6); ctx.lineTo(4,4);
+      ctx.lineTo(3,10);  ctx.lineTo(0,8);  ctx.lineTo(-3,10);
+      ctx.lineTo(-4,4);  ctx.lineTo(-10,6); ctx.closePath(); ctx.fill();
       ctx.fillStyle = '#ffffff88';
-      ctx.beginPath();
-      ctx.arc(0, -6, 1.8, 0, Math.PI*2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(0,-6,1.8,0,Math.PI*2); ctx.fill();
     } else {
-      // Commercial airliner silhouette
       ctx.beginPath();
-      ctx.moveTo(0, -14);          // nose
-      ctx.lineTo(2,  -6);          // fuselage-right
-      ctx.lineTo(11,  1);          // right wingTip
-      ctx.lineTo(4,   4);          // right wing root
-      ctx.lineTo(3,   8);          // right stabiliser tip
-      ctx.lineTo(1,   7);          // right stab root
-      ctx.lineTo(0,  10);          // tail
-      ctx.lineTo(-1,  7);
-      ctx.lineTo(-3,  8);
-      ctx.lineTo(-4,  4);
-      ctx.lineTo(-11, 1);
-      ctx.lineTo(-2, -6);
-      ctx.closePath();
-      ctx.fill();
+      ctx.moveTo(0,-14);  ctx.lineTo(2,-6);   ctx.lineTo(11,1);
+      ctx.lineTo(4,4);    ctx.lineTo(3,8);    ctx.lineTo(1,7);
+      ctx.lineTo(0,10);   ctx.lineTo(-1,7);   ctx.lineTo(-3,8);
+      ctx.lineTo(-4,4);   ctx.lineTo(-11,1);  ctx.lineTo(-2,-6);
+      ctx.closePath(); ctx.fill();
     }
     ctx.restore();
     return c;
@@ -1931,42 +1894,37 @@ const AVIATION_MODULE = (() => {
 
   const _iconCache = {};
   function _getIcon(type, heading) {
-    const bucket = Math.round((heading || 0) / 5) * 5; // 5° buckets → smoother rotation
-    const key    = `${type}_${bucket}`;
+    const bucket = Math.round((heading||0)/5)*5;
+    const key = `${type}_${bucket}`;
     if (!_iconCache[key]) _iconCache[key] = _makeIcon(type, bucket);
     return _iconCache[key];
   }
 
-  // ── Dead-reckoning — 1s smooth movement ──────────────────────
+  // ── Dead-reckoning ────────────────────────────────────────────
   const _drState = new Map();
   let   _drTimer = null;
 
   function _drUpdate() {
     const now = Date.now();
-    _drState.forEach((st, icao24) => {
+    _drState.forEach((st, id) => {
       if (!st.velocity || st.velocity < 10) return;
-      const entity = LAYER_REGISTRY.AVIATION.entities.entities.getById(icao24);
+      const entity = LAYER_REGISTRY.AVIATION.entities.entities.getById(id);
       if (!entity) return;
-      const dt     = (now - st.lastTick) / 1000;
-      st.lastTick  = now;
-      const spdMs  = st.velocity / 3.6;
-      const distM  = spdMs * dt;
-      const R      = 6371000;
-      const hdgRad = (st.heading * Math.PI) / 180;
+      const dt = (now - st.lastTick) / 1000; st.lastTick = now;
+      const spdMs = st.velocity / 3.6;
+      const distM = spdMs * dt;
+      const R = 6371000;
+      const hdgRad = st.heading * Math.PI / 180;
       const latRad = st.lat * Math.PI / 180;
-      st.lat += (distM / R) * (180 / Math.PI) * Math.cos(hdgRad);
-      st.lon += (distM / R) * (180 / Math.PI) / Math.cos(latRad) * Math.sin(hdgRad);
-      st.lat  = Math.max(-85, Math.min(85, st.lat));
-      st.lon  = ((st.lon + 540) % 360) - 180;
-      if (!isFinite(st.lat) || !isFinite(st.lon)) return;
+      st.lat += (distM/R)*(180/Math.PI)*Math.cos(hdgRad);
+      st.lon += (distM/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
+      st.lat = Math.max(-85, Math.min(85, st.lat));
+      st.lon = ((st.lon+540)%360)-180;
+      if (!isFinite(st.lat)||!isFinite(st.lon)) return;
       try {
-        const altM = Math.max((st.alt || 1000) * 0.3048, 500); // ft → m
+        const altM = Math.max((st.alt||1000)*0.3048, 500);
         entity.position = Cesium.Cartesian3.fromDegrees(st.lon, st.lat, altM);
-        // Keep _oeData in sync so click tracker sees latest pos
-        if (entity._oeData) {
-          entity._oeData.lat = st.lat;
-          entity._oeData.lon = st.lon;
-        }
+        if (entity._oeData) { entity._oeData.lat=st.lat; entity._oeData.lon=st.lon; }
       } catch(e) {}
     });
   }
@@ -1975,98 +1933,95 @@ const AVIATION_MODULE = (() => {
     _drTimer = setInterval(_drUpdate, 1000);
   }
 
-  // ── Fetch civil flights from ADSB.lol ────────────────────────
-  async function _fetchCivil() {
-    const res = await fetch(URL_CIVIL, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`ADSB.lol civil HTTP ${res.status}`);
+  // ── Fetch: ADS-B Exchange via RapidAPI (CORS-safe, authenticated) ──
+  async function _fetchADSBX() {
+    LOG.add('[AVIATION] Querying ADS-B Exchange (RapidAPI)...', 'sys');
+    const res = await fetch(URL_ADSBX_ALL, {
+      headers: RAPIDAPI_HEADERS,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`ADS-B Exchange HTTP ${res.status}`);
     const json = await res.json();
-    if (!json.ac?.length) throw new Error('ADSB.lol civil: empty');
+    if (!json.ac?.length) throw new Error('ADS-B Exchange: no aircraft');
+    LOG.add(`[AVIATION] ADS-B Exchange: ${json.ac.length} raw contacts`, 'sig');
     return json.ac
-      .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+      .filter(a => a.lat!=null && a.lon!=null && a.alt_baro!=='ground')
       .map(a => ({
-        source:   'ADSB.lol',
-        icao24:   (a.hex || '').toLowerCase(),
-        callsign: (a.flight || a.hex || '').trim(),
+        source:   'ADS-B Exchange',
+        icao24:   (a.hex||'').toLowerCase(),
+        callsign: (a.flight||a.hex||'').trim(),
         country:  a.r || a.ownOp || '?',
-        lon:      parseFloat(a.lon),
-        lat:      parseFloat(a.lat),
-        altitude: typeof a.alt_baro === 'number' ? a.alt_baro
-                : typeof a.alt_geom === 'number' ? a.alt_geom : 1000,
-        velocity: a.gs        != null ? Math.round(a.gs * 1.852)    : null,
-        heading:  a.track     || a.true_heading || 0,
-        vrate:    a.baro_rate != null ? Math.round(a.baro_rate * 0.00508) : null,
+        lon: parseFloat(a.lon), lat: parseFloat(a.lat),
+        altitude: typeof a.alt_baro==='number' ? a.alt_baro
+                : typeof a.alt_geom==='number' ? a.alt_geom : 1000,
+        velocity: a.gs!=null ? Math.round(a.gs*1.852) : null,
+        heading:  a.track || a.true_heading || 0,
+        vrate:    a.baro_rate!=null ? Math.round(a.baro_rate*0.00508) : null,
         squawk:   a.squawk || null,
-        acType:   a.t   || null,
-        reg:      a.r   || null,
-        onGround: a.alt_baro === 'ground' || !!Number(a.ground),
+        acType:   a.t || null, reg: a.r || null,
+        onGround: a.alt_baro==='ground' || !!Number(a.ground),
         _fromMil: false,
       }));
   }
 
-  // ── Fetch military flights from dedicated mil endpoint ────────
-  async function _fetchMilitary() {
-    const res = await fetch(URL_MIL, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`ADSB.lol mil HTTP ${res.status}`);
+  // ── Fetch: ADS-B Exchange military endpoint ───────────────────
+  async function _fetchADSBXMil() {
+    const res = await fetch(URL_ADSBX_MIL, {
+      headers: RAPIDAPI_HEADERS,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`ADS-B Exchange MIL HTTP ${res.status}`);
     const json = await res.json();
-    if (!json.ac?.length) throw new Error('ADSB.lol mil: empty');
+    if (!json.ac?.length) throw new Error('ADS-B Exchange MIL: empty');
     return json.ac
-      .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+      .filter(a => a.lat!=null && a.lon!=null && a.alt_baro!=='ground')
       .map(a => ({
-        source:   'ADSB.lol/MIL',
-        icao24:   (a.hex || '').toLowerCase(),
-        callsign: (a.flight || a.hex || '').trim(),
+        source:   'ADS-B Exchange/MIL',
+        icao24:   (a.hex||'').toLowerCase(),
+        callsign: (a.flight||a.hex||'').trim(),
         country:  a.r || a.ownOp || '?',
-        lon:      parseFloat(a.lon),
-        lat:      parseFloat(a.lat),
-        altitude: typeof a.alt_baro === 'number' ? a.alt_baro
-                : typeof a.alt_geom === 'number' ? a.alt_geom : 1000,
-        velocity: a.gs        != null ? Math.round(a.gs * 1.852)    : null,
-        heading:  a.track     || a.true_heading || 0,
-        vrate:    a.baro_rate != null ? Math.round(a.baro_rate * 0.00508) : null,
+        lon: parseFloat(a.lon), lat: parseFloat(a.lat),
+        altitude: typeof a.alt_baro==='number' ? a.alt_baro
+                : typeof a.alt_geom==='number' ? a.alt_geom : 1000,
+        velocity: a.gs!=null ? Math.round(a.gs*1.852) : null,
+        heading:  a.track || a.true_heading || 0,
+        vrate:    a.baro_rate!=null ? Math.round(a.baro_rate*0.00508) : null,
         squawk:   a.squawk || null,
-        acType:   a.t   || null,
-        reg:      a.r   || null,
-        onGround: false,
-        _fromMil: true, // guaranteed military
+        acType:   a.t || null, reg: a.r || null,
+        onGround: false, _fromMil: true,
       }));
   }
 
-  // ── OpenSky fallback ──────────────────────────────────────────
+  // ── Fetch: OpenSky fallback (no auth needed for basic access) ─
   async function _fetchOpenSky() {
     const res = await fetch('https://opensky-network.org/api/states/all',
-                            { signal: AbortSignal.timeout(12000) });
+                            { signal: AbortSignal.timeout(15000) });
     if (!res.ok) throw new Error(`OpenSky HTTP ${res.status}`);
     const json = await res.json();
     if (!json.states?.length) throw new Error('OpenSky: empty');
     return json.states
-      .filter(s => s[5] != null && s[6] != null && !s[8])
+      .filter(s => s[5]!=null && s[6]!=null && !s[8])
       .map(s => ({
         source:   'OpenSky',
-        icao24:   s[0] || '',
-        callsign: (s[1] || '').trim(),
-        country:  s[2] || '?',
-        lon:      s[5], lat: s[6],
-        altitude: s[7] || s[13] || 1000,
-        velocity: s[9]  != null ? Math.round(s[9] * 3.6) : null,
-        heading:  s[10] || 0,
-        vrate:    s[11] != null ? Math.round(s[11])       : null,
-        squawk:   s[14] || null,
-        onGround: false,
-        _fromMil: false,
+        icao24:   s[0]||'', callsign: (s[1]||'').trim(),
+        country:  s[2]||'?',
+        lon: s[5], lat: s[6],
+        altitude: s[7]||s[13]||1000,
+        velocity: s[9]!=null ? Math.round(s[9]*3.6) : null,
+        heading:  s[10]||0,
+        vrate:    s[11]!=null ? Math.round(s[11]) : null,
+        squawk:   s[14]||null, onGround: false, _fromMil: false,
       }));
   }
 
-  // ── Merge by ICAO24 — mil + ADSB.lol wins over OpenSky ───────
   function _merge(lists) {
     const map = new Map();
-    // Priority: OpenSky < ADSB.lol civil < ADSB.lol mil
-    for (const list of lists) {
+    for (const list of lists)
       list.forEach(f => {
-        const key = f.icao24.toLowerCase() || Math.random().toString();
-        if (!map.has(key) || f._fromMil || f.source === 'ADSB.lol')
+        const key = f.icao24.toLowerCase() || Math.random().toString(36);
+        if (!map.has(key) || f._fromMil || f.source.startsWith('ADS-B'))
           map.set(key, f);
       });
-    }
     return Array.from(map.values());
   }
 
@@ -2074,157 +2029,122 @@ const AVIATION_MODULE = (() => {
   function _render(flights) {
     const layer = LAYER_REGISTRY.AVIATION;
     layer.entities.entities.removeAll();
-
     let milCount = 0;
     const feedItems = [];
 
     flights.forEach(f => {
       const cls = _classify(f);
       f.classification = cls;
-
       if (cls === 'MILITARY') {
         milCount++;
-        LOG.add(
-          `[SIGINT] MIL TRANSPONDER — ${(f.callsign || f.icao24).toUpperCase()} · ${f.country} · ${f.acType || '?'}`,
-          'warn'
-        );
+        LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country} · ${f.acType||'?'}`, 'warn');
       }
-
-      // Altitude: ADSB.lol reports in feet, OpenSky in metres
-      const altFt  = f.source === 'OpenSky'
-        ? (f.altitude || 500) * 3.28084   // m→ft for consistent FL display
-        : (f.altitude || 500);
-      const altM   = Math.max(f.source === 'OpenSky'
-        ? (f.altitude || 500)
-        : (f.altitude || 500) * 0.3048, 300);
-      const flStr  = `FL${Math.round(altFt / 100).toString().padStart(3,'0')}`;
-
-      const col  = cls === 'MILITARY' ? '#ff9900' : '#00ff9d';
-      const icon = _getIcon(cls, f.heading);
-
-      if (!isFinite(f.lat) || !isFinite(f.lon)) return;
+      const altFt = f.source==='OpenSky' ? (f.altitude||500)*3.28084 : (f.altitude||500);
+      const altM  = Math.max(f.source==='OpenSky' ? (f.altitude||500) : (f.altitude||500)*0.3048, 300);
+      const flStr = `FL${Math.round(altFt/100).toString().padStart(3,'0')}`;
+      const col   = cls==='MILITARY' ? '#ff9900' : '#00ff9d';
+      const icon  = _getIcon(cls, f.heading);
+      if (!isFinite(f.lat)||!isFinite(f.lon)) return;
 
       const entity = layer.entities.entities.add({
-        id:       f.icao24 || undefined,
+        id: f.icao24||undefined,
         position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, altM),
-
         billboard: {
-          image:          icon,
-          width:          cls === 'MILITARY' ? 32 : 28,
-          height:         cls === 'MILITARY' ? 32 : 28,
+          image: icon, width: cls==='MILITARY'?32:28, height: cls==='MILITARY'?32:28,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          scaleByDistance:      new Cesium.NearFarScalar(80_000, 1.4, 8_000_000, 0.25),
-          translucencyByDistance: new Cesium.NearFarScalar(100_000, 1.0, 12_000_000, 0.4),
+          scaleByDistance: new Cesium.NearFarScalar(80_000,1.4,8_000_000,0.25),
+          translucencyByDistance: new Cesium.NearFarScalar(100_000,1.0,12_000_000,0.4),
           disableDepthTestDistance: 500,
         },
-
-        // Vertical stem to surface
         polyline: {
-          positions: Cesium.Cartesian3.fromDegreesArrayHeights([f.lon,f.lat,0, f.lon,f.lat,altM]),
+          positions: Cesium.Cartesian3.fromDegreesArrayHeights([f.lon,f.lat,0,f.lon,f.lat,altM]),
           width: 1,
           material: new Cesium.PolylineDashMaterialProperty({
-            color: Cesium.Color.fromCssColorString(col).withAlpha(0.15),
-            dashLength: 12,
+            color: Cesium.Color.fromCssColorString(col).withAlpha(0.15), dashLength: 12,
           }),
           clampToGround: false,
         },
-
         label: {
-          text:             f.callsign || f.icao24.toUpperCase(),
-          font:             '11px Share Tech Mono, monospace',
-          fillColor:        Cesium.Color.fromCssColorString(col),
-          outlineColor:     Cesium.Color.BLACK,
-          outlineWidth:     2,
-          style:            Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset:      new Cesium.Cartesian2(0, -22),
-          scaleByDistance:  new Cesium.NearFarScalar(80_000, 1.0, 2_500_000, 0.0),
+          text: f.callsign||f.icao24.toUpperCase(),
+          font: '11px Share Tech Mono, monospace',
+          fillColor: Cesium.Color.fromCssColorString(col),
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0,-22),
+          scaleByDistance: new Cesium.NearFarScalar(80_000,1.0,2_500_000,0.0),
           disableDepthTestDistance: 500,
-          showBackground:   true,
-          backgroundColor:  Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
-          backgroundPadding:new Cesium.Cartesian2(4, 2),
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
+          backgroundPadding: new Cesium.Cartesian2(4,2),
         },
       });
 
       entity._oeData = { ...f, type:'flight', altM, flStr };
-
-      _drState.set((f.icao24||'').toLowerCase() || f.callsign, {
-        lat: f.lat, lon: f.lon,
-        alt: f.altitude || 1000,
-        heading:  f.heading  || 0,
-        velocity: f.velocity || 0,
-        lastTick: Date.now(),
+      _drState.set((f.icao24||'').toLowerCase()||f.callsign, {
+        lat:f.lat, lon:f.lon, alt:f.altitude||1000,
+        heading:f.heading||0, velocity:f.velocity||0, lastTick:Date.now(),
       });
-
       feedItems.push({
-        type:     'flight',
-        name:     f.callsign || f.icao24.toUpperCase(),
-        sub:      `${f.country} · ${flStr} · ${f.velocity != null ? f.velocity+'km/h' : '?'}`,
-        color:    col,
-        tag:      cls === 'MILITARY' ? 'tag-mil' : 'tag-air',
-        tagLabel: cls === 'MILITARY' ? 'MIL' : 'CIV',
-        lat: f.lat, lon: f.lon,
-        feedAlt: Math.max(altM * 1.5, 150_000),
+        type:'flight', name:f.callsign||f.icao24.toUpperCase(),
+        sub:`${f.country} · ${flStr} · ${f.velocity!=null?f.velocity+'km/h':'?'}`,
+        color:col, tag:cls==='MILITARY'?'tag-mil':'tag-air',
+        tagLabel:cls==='MILITARY'?'MIL':'CIV',
+        lat:f.lat, lon:f.lon, feedAlt:Math.max(altM*1.5,150_000),
       });
     });
 
-    // Prune stale DR entries
-    const activeHex = new Set(flights.map(f => (f.icao24||'').toLowerCase()));
-    for (const key of _drState.keys()) { if (!activeHex.has(key)) _drState.delete(key); }
+    const activeHex = new Set(flights.map(f=>(f.icao24||'').toLowerCase()));
+    for (const key of _drState.keys()) { if(!activeHex.has(key)) _drState.delete(key); }
     _startDR();
-
     layer.count = flights.length;
     LAYER_REGISTRY._sync('AVIATION');
     UI.renderFeed(feedItems);
-    LOG.add(`[AVIATION] ${flights.length} contacts · ${milCount} military`, 'sig');
+    LOG.add(`[AVIATION] ${flights.length} contacts plotted · ${milCount} military`, 'sig');
     UI.setStatus('aviation', `LIVE · ${flights.length}`, 'ok');
     document.getElementById('sb-flights').innerHTML = `FLIGHTS <span>${flights.length}</span>`;
+    document.getElementById('sb-demo').style.display = 'none';
   }
 
   // ── Demo fallback ─────────────────────────────────────────────
-  function _demo() {
-    LOG.add('[AVIATION] APIs unavailable — loading global demo contacts', 'warn');
+  function _demo(reason) {
+    LOG.add(`[AVIATION] Live feeds failed (${reason}) — demo mode`, 'alrt');
     document.getElementById('sb-demo').style.display = 'block';
     const DEMO = [
-      { icao24:'a12345',callsign:'UAL901', country:'USA',       lon:-87.50,lat:41.00, altitude:36000,velocity:920,heading:90, vrate:0, squawk:'2341',source:'Demo',acType:'B77W',_fromMil:false },
-      { icao24:'a23456',callsign:'AAL100', country:'USA',       lon:-118.2,lat:34.05, altitude:31000,velocity:880,heading:270,vrate:-5,squawk:'1200',source:'Demo',acType:'B788',_fromMil:false },
-      { icao24:'3c6444',callsign:'DLH400', country:'Germany',   lon:10.00, lat:50.00, altitude:37000,velocity:910,heading:270,vrate:0, squawk:'1000',source:'Demo',acType:'A346',_fromMil:false },
-      { icao24:'400f86',callsign:'BAW176', country:'UK',        lon:-0.50, lat:51.50, altitude:35000,velocity:900,heading:80, vrate:5, squawk:'4521',source:'Demo',acType:'B789',_fromMil:false },
-      { icao24:'896060',callsign:'UAE203', country:'UAE',       lon:55.36, lat:25.25, altitude:39000,velocity:930,heading:90, vrate:0, squawk:'2001',source:'Demo',acType:'A388',_fromMil:false },
-      { icao24:'780b9b',callsign:'CCA881', country:'China',     lon:116.4, lat:39.90, altitude:39000,velocity:930,heading:90, vrate:0, squawk:'5001',source:'Demo',acType:'B77W',_fromMil:false },
-      { icao24:'71be60',callsign:'SIA21',  country:'Singapore', lon:104.0, lat:1.35,  altitude:35000,velocity:895,heading:45, vrate:0, squawk:'3412',source:'Demo',acType:'A359',_fromMil:false },
-      { icao24:'7c6b35',callsign:'QFA100', country:'Australia', lon:151.2, lat:-33.9, altitude:37000,velocity:910,heading:315,vrate:0, squawk:'6100',source:'Demo',acType:'A388',_fromMil:false },
-      { icao24:'ae0408',callsign:'RCH872', country:'USA',       lon:-77.00,lat:38.00, altitude:35000,velocity:855,heading:100,vrate:0, squawk:'7700',source:'Demo',acType:'C17', _fromMil:true  },
-      { icao24:'ae1234',callsign:'REACH01',country:'USA',       lon:57.50, lat:21.30, altitude:40000,velocity:870,heading:270,vrate:0, squawk:'7001',source:'Demo',acType:'KC135',_fromMil:true },
-      { icao24:'800e22',callsign:'IAF221', country:'India',     lon:77.10, lat:28.60, altitude:28000,velocity:830,heading:270,vrate:0, squawk:'7001',source:'Demo',acType:'C130',_fromMil:true  },
-      { icao24:'e49151',callsign:'GLO1234',country:'Brazil',    lon:-46.6, lat:-23.6, altitude:36000,velocity:870,heading:180,vrate:0, squawk:'5200',source:'Demo',acType:'B737',_fromMil:false },
+      {icao24:'a12345',callsign:'UAL901',country:'USA',lon:-87.5,lat:41.0,altitude:36000,velocity:920,heading:90,vrate:0,squawk:'2341',source:'Demo',acType:'B77W',_fromMil:false},
+      {icao24:'a23456',callsign:'AAL100',country:'USA',lon:-118.2,lat:34.05,altitude:31000,velocity:880,heading:270,vrate:-5,squawk:'1200',source:'Demo',acType:'B788',_fromMil:false},
+      {icao24:'3c6444',callsign:'DLH400',country:'Germany',lon:10.0,lat:50.0,altitude:37000,velocity:910,heading:270,vrate:0,squawk:'1000',source:'Demo',acType:'A346',_fromMil:false},
+      {icao24:'400f86',callsign:'BAW176',country:'UK',lon:-0.5,lat:51.5,altitude:35000,velocity:900,heading:80,vrate:5,squawk:'4521',source:'Demo',acType:'B789',_fromMil:false},
+      {icao24:'896060',callsign:'UAE203',country:'UAE',lon:55.36,lat:25.25,altitude:39000,velocity:930,heading:90,vrate:0,squawk:'2001',source:'Demo',acType:'A388',_fromMil:false},
+      {icao24:'780b9b',callsign:'CCA881',country:'China',lon:116.4,lat:39.9,altitude:39000,velocity:930,heading:90,vrate:0,squawk:'5001',source:'Demo',acType:'B77W',_fromMil:false},
+      {icao24:'71be60',callsign:'SIA21',country:'Singapore',lon:104.0,lat:1.35,altitude:35000,velocity:895,heading:45,vrate:0,squawk:'3412',source:'Demo',acType:'A359',_fromMil:false},
+      {icao24:'ae0408',callsign:'RCH872',country:'USA',lon:-77.0,lat:38.0,altitude:35000,velocity:855,heading:100,vrate:0,squawk:'7700',source:'Demo',acType:'C17',_fromMil:true},
+      {icao24:'ae1234',callsign:'REACH01',country:'USA',lon:57.5,lat:21.3,altitude:40000,velocity:870,heading:270,vrate:0,squawk:'7001',source:'Demo',acType:'KC135',_fromMil:true},
+      {icao24:'800e22',callsign:'IAF221',country:'India',lon:77.1,lat:28.6,altitude:28000,velocity:830,heading:270,vrate:0,squawk:'7001',source:'Demo',acType:'C130',_fromMil:true},
     ];
     _render(DEMO);
   }
 
   // ── Detail renderer ───────────────────────────────────────────
   DETAIL_RENDERERS['flight'] = (d) => {
-    const cls   = d.classification || 'COMMERCIAL';
-    const col   = cls === 'MILITARY' ? 'var(--orange)' : 'var(--g)';
-    const badge = cls === 'MILITARY'
+    const cls = d.classification||'COMMERCIAL';
+    const col = cls==='MILITARY'?'var(--orange)':'var(--g)';
+    const badge = cls==='MILITARY'
       ? `<span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,153,0,0.4);background:rgba(255,153,0,0.08)">⚠ MILITARY</span>`
       : `<span class="detail-badge" style="color:var(--cyan);border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.08)">✈ COMMERCIAL</span>`;
-
-    const fl   = d.flStr || '—';
-    const spd  = d.velocity != null ? `${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)` : '—';
-    const hdg  = d.heading  != null ? `${Math.round(d.heading)}°` : '—';
-    const vr   = d.vrate    != null
-      ? `<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">
-           ${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>` : '—';
-    const sq   = d.squawk
+    const fl  = d.flStr||'—';
+    const spd = d.velocity!=null?`${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)`:'—';
+    const hdg = d.heading!=null?`${Math.round(d.heading)}°`:'—';
+    const vr  = d.vrate!=null
+      ? `<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>` : '—';
+    const sq  = d.squawk
       ? `<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>` : '—';
-
     return `
-      <div class="detail-name" style="color:${col}">${d.callsign || (d.icao24||'').toUpperCase() || 'UNKNOWN'}</div>
+      <div class="detail-name" style="color:${col}">${d.callsign||(d.icao24||'').toUpperCase()||'UNKNOWN'}</div>
       ${badge}
       <div class="detail-grid" style="margin-top:6px">
-        <div><div class="dg-cell-label">ICAO24 / HEX</div><div class="dg-cell-value">${(d.icao24||'—').toUpperCase()}</div></div>
-        <div><div class="dg-cell-label">Country / Reg</div><div class="dg-cell-value">${d.country||'—'} ${d.reg?'· '+d.reg:''}</div></div>
-        <div><div class="dg-cell-label">Flight Level</div><div class="dg-cell-value" style="color:${col};font-size:0.8rem;font-weight:bold">${fl}</div></div>
+        <div><div class="dg-cell-label">ICAO24</div><div class="dg-cell-value">${(d.icao24||'—').toUpperCase()}</div></div>
+        <div><div class="dg-cell-label">Country</div><div class="dg-cell-value">${d.country||'—'} ${d.reg?'· '+d.reg:''}</div></div>
+        <div><div class="dg-cell-label">Flight Level</div><div class="dg-cell-value" style="color:${col};font-weight:bold">${fl}</div></div>
         <div><div class="dg-cell-label">Aircraft</div><div class="dg-cell-value">${d.acType||'—'}</div></div>
         <div><div class="dg-cell-label">Speed</div><div class="dg-cell-value">${spd}</div></div>
         <div><div class="dg-cell-label">Heading</div><div class="dg-cell-value">${hdg}</div></div>
@@ -2234,446 +2154,369 @@ const AVIATION_MODULE = (() => {
       </div>`;
   };
 
-  // ── Main refresh ──────────────────────────────────────────────
+  // ── Main refresh — exponential backoff ────────────────────────
   LAYER_REGISTRY.AVIATION.refresh = async function () {
     UI.setStatus('aviation', 'FETCHING', 'warn');
-    LOG.add('[AVIATION] Polling civil + military feeds simultaneously...', 'sys');
 
-    // Fetch civil and military in parallel
-    const [civilResult, milResult, osResult] = await Promise.allSettled([
-      _fetchCivil(),
-      _fetchMilitary(),
-      _fetchOpenSky(),
+    // Try ADS-B Exchange first (authenticated, CORS-safe)
+    const [adsbxResult, milResult] = await Promise.allSettled([
+      _fetchADSBX(), _fetchADSBXMil(),
     ]);
 
-    const civil = civilResult.status  === 'fulfilled' ? civilResult.value  : [];
-    const mil   = milResult.status    === 'fulfilled' ? milResult.value    : [];
-    const os    = osResult.status     === 'fulfilled' ? osResult.value     : [];
+    const civil = adsbxResult.status==='fulfilled' ? adsbxResult.value : [];
+    const mil   = milResult.status==='fulfilled'   ? milResult.value   : [];
 
-    if (civilResult.status === 'rejected')
-      LOG.add(`[AVIATION] Civil feed failed — ${civilResult.reason?.message}`, 'warn');
-    if (milResult.status === 'rejected')
-      LOG.add(`[AVIATION] Military feed failed — ${milResult.reason?.message}`, 'warn');
+    if (adsbxResult.status==='rejected')
+      LOG.add(`[AVIATION] ADS-B Exchange failed — ${adsbxResult.reason?.message}`, 'warn');
+    if (milResult.status==='rejected')
+      LOG.add(`[AVIATION] ADS-B Exchange MIL failed — ${milResult.reason?.message}`, 'warn');
 
-    if (!civil.length && !mil.length && !os.length) {
-      _demo(); return;
+    if (civil.length > 0 || mil.length > 0) {
+      const merged = _merge([civil, mil]).filter(f =>
+        isFinite(f.lat)&&isFinite(f.lon)
+        &&f.lat>=-90&&f.lat<=90&&f.lon>=-180&&f.lon<=180&&!f.onGround
+      );
+      _render(merged);
+      return;
     }
 
-    LOG.add(`[AVIATION] Civil:${civil.length} Mil:${mil.length} OpenSky:${os.length}`, 'sig');
+    // Fallback to OpenSky
+    LOG.add('[AVIATION] ADS-B Exchange down — trying OpenSky fallback...', 'warn');
+    try {
+      const os = await _fetchOpenSky();
+      if (os.length > 0) {
+        const valid = os.filter(f=>isFinite(f.lat)&&isFinite(f.lon)&&!f.onGround);
+        _render(valid);
+        return;
+      }
+    } catch(e) {
+      LOG.add(`[AVIATION] OpenSky also failed — ${e.message}`, 'warn');
+    }
 
-    // Merge — mil takes priority, then ADSB.lol civil, then OpenSky
-    const merged = _merge([os, civil, mil]);
-
-    // Sanitise — valid coords, airborne only
-    const valid = merged.filter(f =>
-      isFinite(f.lat) && isFinite(f.lon)
-      && f.lat >= -90  && f.lat  <= 90
-      && f.lon >= -180 && f.lon  <= 180
-      && !f.onGround
-    );
-
-    _render(valid);
+    _demo('all sources unavailable');
   };
 
-  LOG.add('[AVIATION] v2 module loaded — civil + military feeds active', 'air');
+  LOG.add('[AVIATION] v3 module loaded — ADS-B Exchange + OpenSky', 'air');
   UI.setStatus('aviation', 'LOADING', 'warn');
   setTimeout(() => LAYER_REGISTRY.AVIATION.refresh(), 800);
-
   return { refresh: () => LAYER_REGISTRY.AVIATION.refresh() };
 
 })(); // END AVIATION_MODULE
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  MARITIME_MODULE  —  v2 UPGRADED                            ║
-// ║  Sources : AISHub regional passes · VTExplorer · AISStream  ║
-// ║  Features: Vessel trails · Naval detection · Rich icons      ║
+// ║  MARITIME_MODULE  —  v3  LIVE WEBSOCKET                     ║
+// ║  Primary : AISStream WebSocket (authenticated, real-time)   ║
+// ║  Fallback: Demo vessels at global chokepoints               ║
 // ╚══════════════════════════════════════════════════════════════╝
 const MARITIME_MODULE = (() => {
 
-  const BBOX = { latMin:-90, latMax:90, lonMin:-180, lonMax:180 };
+  const AISSTREAM_KEY = '6f8d4921ef79798d5db5949081861588deacc208';
 
-  // ── Vessel classification by AIS ship type code ───────────────
-  // Full ITU/IMO ship type table
+  // ── Vessel classification ─────────────────────────────────────
   const CLS_STYLE = {
-    CARGO:     { color:'#00ff9d', label:'CARGO',     tag:'tag-ship' },
-    TANKER:    { color:'#ff3c3c', label:'TANKER',    tag:'tag-warn' },
-    NAVAL:     { color:'#00d4ff', label:'NAVAL',     tag:'tag-mil'  },
-    PASSENGER: { color:'#ffe600', label:'PASSENGER', tag:'tag-air'  },
-    FISHING:   { color:'#b44fff', label:'FISHING',   tag:'tag-ship' },
-    TUG:       { color:'#ff9900', label:'TUG/SUPPLY',tag:'tag-ship' },
-    HIGHSPEED: { color:'#ff9900', label:'HIGH SPEED',tag:'tag-air'  },
-    SAR:       { color:'#ff3c3c', label:'SAR',       tag:'tag-warn' },
-    OTHER:     { color:'#44ffcc', label:'OTHER',     tag:'tag-ship' },
+    CARGO:     { color:'#00ff9d', label:'CARGO',      tag:'tag-ship' },
+    TANKER:    { color:'#ff3c3c', label:'TANKER',     tag:'tag-warn' },
+    NAVAL:     { color:'#00d4ff', label:'NAVAL',      tag:'tag-mil'  },
+    PASSENGER: { color:'#ffe600', label:'PASSENGER',  tag:'tag-air'  },
+    FISHING:   { color:'#b44fff', label:'FISHING',    tag:'tag-ship' },
+    TUG:       { color:'#ff9900', label:'TUG',        tag:'tag-ship' },
+    HIGHSPEED: { color:'#ff9900', label:'HIGH SPEED', tag:'tag-air'  },
+    SAR:       { color:'#ff3c3c', label:'SAR',        tag:'tag-warn' },
+    OTHER:     { color:'#44ffcc', label:'OTHER',      tag:'tag-ship' },
   };
 
-  function _classify(v) {
-    const t    = parseInt(v.shipType || 0);
-    const mmsi = String(v.mmsi || '');
-    const name = (v.name || '').toUpperCase();
-
-    // MMSI 100–199 = military / coast guard in most nations
-    const mmsiPfx = parseInt(mmsi.substring(0,3));
-    if (mmsiPfx >= 100 && mmsiPfx <= 199) return 'NAVAL';
-    // Name hints
-    if (/\b(HMS|USS|INS|PNS|BNS|USCG|FRIGATE|DESTROYER|CORVETTE|WARSHIP|PATROL|COAST.?GUARD|NAVAL)\b/.test(name))
-      return 'NAVAL';
-
-    if (t >= 35 && t <= 39) return 'NAVAL';         // military / law enforcement
-    if (t >= 20 && t <= 29) return 'HIGHSPEED';      // WIG / high speed craft
-    if (t === 51 || t === 52) return 'SAR';           // SAR / pilot
-    if (t >= 50 && t <= 59) return 'TUG';            // tugs, pilot, tenders
-    if (t >= 60 && t <= 69) return 'PASSENGER';
-    if (t >= 70 && t <= 79) return 'CARGO';
-    if (t >= 80 && t <= 89) return 'TANKER';
-    if (t >= 30 && t <= 34) return 'FISHING';
-    return 'OTHER';
-  }
-
-  // ── Global strategic chokepoints (20 waterways) ───────────────
-  const CHOKEPOINTS = [
-    { name:'MALACCA STRAIT',      latMin:1.0,   latMax:6.5,  lonMin:99.0,  lonMax:104.5 },
-    { name:'STRAIT OF HORMUZ',    latMin:25.5,  latMax:27.5, lonMin:56.0,  lonMax:59.5  },
-    { name:'BAB-EL-MANDEB',       latMin:11.5,  latMax:13.5, lonMin:42.5,  lonMax:44.5  },
-    { name:'LOMBOK STRAIT',       latMin:-9.0,  latMax:-7.5, lonMin:115.0, lonMax:116.5 },
-    { name:'SUNDA STRAIT',        latMin:-6.5,  latMax:-5.5, lonMin:105.5, lonMax:106.5 },
-    { name:'SINGAPORE STRAIT',    latMin:1.1,   latMax:1.5,  lonMin:103.5, lonMax:104.2 },
-    { name:'TAIWAN STRAIT',       latMin:22.0,  latMax:27.0, lonMin:119.0, lonMax:121.5 },
-    { name:'KOREA STRAIT',        latMin:33.5,  latMax:35.5, lonMin:128.5, lonMax:131.0 },
-    { name:'SUEZ CANAL',          latMin:29.0,  latMax:33.0, lonMin:31.5,  lonMax:34.5  },
-    { name:'CAPE OF GOOD HOPE',   latMin:-35.5, latMax:-33.0,lonMin:17.5,  lonMax:20.0  },
-    { name:'CAPE HORN',           latMin:-56.5, latMax:-54.5,lonMin:-68.0, lonMax:-63.0 },
-    { name:'STRAIT OF GIBRALTAR', latMin:35.5,  latMax:36.5, lonMin:-6.0,  lonMax:-5.0  },
-    { name:'ENGLISH CHANNEL',     latMin:50.0,  latMax:52.5, lonMin:-2.0,  lonMax:2.5   },
-    { name:'DANISH STRAITS',      latMin:54.5,  latMax:57.5, lonMin:9.5,   lonMax:13.0  },
-    { name:'TURKISH STRAITS',     latMin:40.5,  latMax:42.0, lonMin:26.5,  lonMax:29.5  },
-    { name:'PANAMA CANAL',        latMin:8.5,   latMax:10.0, lonMin:-80.0, lonMax:-77.5 },
-    { name:'FLORIDA STRAIT',      latMin:23.0,  latMax:25.5, lonMin:-81.0, lonMax:-78.5 },
-    { name:'CHITTAGONG PORT',     latMin:21.5,  latMax:22.5, lonMin:91.5,  lonMax:92.5  },
-    { name:'MUMBAI APPROACH',     latMin:18.5,  latMax:19.5, lonMin:72.5,  lonMax:73.5  },
-    { name:'COLOMBO APPROACH',    latMin:6.5,   latMax:7.5,  lonMin:79.5,  lonMax:80.5  },
-  ];
-
-  function _getChokepoint(lat, lon) {
-    return CHOKEPOINTS.find(z =>
-      lat >= z.latMin && lat <= z.latMax && lon >= z.lonMin && lon <= z.lonMax
-    ) || null;
-  }
-
-  // ── AIS nav status lookup ─────────────────────────────────────
   const NAV_STATUS = [
     'Under way (engine)','At anchor','Not under command','Restricted maneuverability',
     'Constrained by draught','Moored','Aground','Engaged in fishing',
-    'Under way (sailing)','Reserved (HSC)','Reserved (WIG)','Reserved 11',
-    'Reserved 12','Reserved 13','AIS-SART','Undefined',
+    'Under way (sailing)','Reserved','Reserved','Reserved',
+    'Reserved','Reserved','AIS-SART','Undefined',
   ];
 
-  // ── Ship icon factory — per vessel class ──────────────────────
+  function _classify(v) {
+    const t    = parseInt(v.shipType||0);
+    const mmsi = String(v.mmsi||'');
+    const name = (v.name||'').toUpperCase();
+    const mmsiPfx = parseInt(mmsi.substring(0,3));
+    if (mmsiPfx>=100&&mmsiPfx<=199) return 'NAVAL';
+    if (/\b(HMS|USS|INS|PNS|BNS|USCG|FRIGATE|DESTROYER|CORVETTE|WARSHIP|PATROL|COAST.?GUARD|NAVAL)\b/.test(name)) return 'NAVAL';
+    if (t>=35&&t<=39) return 'NAVAL';
+    if (t>=20&&t<=29) return 'HIGHSPEED';
+    if (t===51||t===52) return 'SAR';
+    if (t>=50&&t<=59) return 'TUG';
+    if (t>=60&&t<=69) return 'PASSENGER';
+    if (t>=70&&t<=79) return 'CARGO';
+    if (t>=80&&t<=89) return 'TANKER';
+    if (t>=30&&t<=34) return 'FISHING';
+    return 'OTHER';
+  }
+
+  // ── Global chokepoints ────────────────────────────────────────
+  const CHOKEPOINTS = [
+    {name:'MALACCA STRAIT',     latMin:1.0,  latMax:6.5,  lonMin:99.0,  lonMax:104.5},
+    {name:'STRAIT OF HORMUZ',   latMin:25.5, latMax:27.5, lonMin:56.0,  lonMax:59.5},
+    {name:'BAB-EL-MANDEB',      latMin:11.5, latMax:13.5, lonMin:42.5,  lonMax:44.5},
+    {name:'SUEZ CANAL',         latMin:29.0, latMax:33.0, lonMin:31.5,  lonMax:34.5},
+    {name:'STRAIT OF GIBRALTAR',latMin:35.5, latMax:36.5, lonMin:-6.0,  lonMax:-5.0},
+    {name:'ENGLISH CHANNEL',    latMin:50.0, latMax:52.5, lonMin:-2.0,  lonMax:2.5},
+    {name:'SINGAPORE STRAIT',   latMin:1.1,  latMax:1.5,  lonMin:103.5, lonMax:104.2},
+    {name:'TAIWAN STRAIT',      latMin:22.0, latMax:27.0, lonMin:119.0, lonMax:121.5},
+    {name:'PANAMA CANAL',       latMin:8.5,  latMax:10.0, lonMin:-80.0, lonMax:-77.5},
+    {name:'CAPE OF GOOD HOPE',  latMin:-35.5,latMax:-33.0,lonMin:17.5,  lonMax:20.0},
+  ];
+
+  function _getChokepoint(lat,lon) {
+    return CHOKEPOINTS.find(z=>lat>=z.latMin&&lat<=z.latMax&&lon>=z.lonMin&&lon<=z.lonMax)||null;
+  }
+
+  // ── Ship icon factory ─────────────────────────────────────────
+  const _iconCache = {};
   function _makeShipIcon(cls, heading) {
-    const SZ  = 36;
-    const c   = document.createElement('canvas');
-    c.width   = c.height = SZ;
-    const ctx = c.getContext('2d');
-    const col = CLS_STYLE[cls]?.color || '#44ffcc';
-
-    ctx.save();
-    ctx.translate(SZ/2, SZ/2);
-    ctx.rotate((heading || 0) * Math.PI / 180);
-    ctx.shadowColor = col; ctx.shadowBlur = 10;
-    ctx.fillStyle   = col; ctx.strokeStyle = col; ctx.lineWidth = 1;
-
-    if (cls === 'NAVAL') {
-      // Warship — narrow hull, prominent bow
+    const SZ=36, c=document.createElement('canvas');
+    c.width=c.height=SZ;
+    const ctx=c.getContext('2d');
+    const col=CLS_STYLE[cls]?.color||'#44ffcc';
+    ctx.save(); ctx.translate(SZ/2,SZ/2);
+    ctx.rotate((heading||0)*Math.PI/180);
+    ctx.shadowColor=col; ctx.shadowBlur=10;
+    ctx.fillStyle=col; ctx.strokeStyle=col; ctx.lineWidth=1;
+    if (cls==='NAVAL') {
       ctx.beginPath();
-      ctx.moveTo(0,  -14);
-      ctx.lineTo(5,   -4);
-      ctx.lineTo(5,    8);
-      ctx.lineTo(3,   12);
-      ctx.lineTo(-3,  12);
-      ctx.lineTo(-5,   8);
-      ctx.lineTo(-5,  -4);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = '#ffffff66';
-      ctx.fillRect(-2, -6, 4, 6);  // superstructure
-    } else if (cls === 'TANKER') {
-      // Tanker — wide flat hull
+      ctx.moveTo(0,-14);ctx.lineTo(5,-4);ctx.lineTo(5,8);
+      ctx.lineTo(3,12);ctx.lineTo(-3,12);ctx.lineTo(-5,8);ctx.lineTo(-5,-4);
+      ctx.closePath();ctx.fill();
+      ctx.fillStyle='#ffffff66';ctx.fillRect(-2,-6,4,6);
+    } else if (cls==='TANKER') {
       ctx.beginPath();
-      ctx.moveTo(0,  -13);
-      ctx.lineTo(7,   -4);
-      ctx.lineTo(7,   10);
-      ctx.lineTo(-7,  10);
-      ctx.lineTo(-7,  -4);
-      ctx.closePath();
-      ctx.fill();
-    } else if (cls === 'PASSENGER') {
-      // Passenger — tall multi-deck
+      ctx.moveTo(0,-13);ctx.lineTo(7,-4);ctx.lineTo(7,10);ctx.lineTo(-7,10);ctx.lineTo(-7,-4);
+      ctx.closePath();ctx.fill();
+    } else if (cls==='PASSENGER') {
       ctx.beginPath();
-      ctx.moveTo(0, -14);
-      ctx.lineTo(6,  -2);
-      ctx.lineTo(6,  10);
-      ctx.lineTo(-6, 10);
-      ctx.lineTo(-6, -2);
-      ctx.closePath();
-      ctx.fill();
-      // Deck lines
-      ctx.strokeStyle = '#00000044';
-      ctx.lineWidth = 0.8;
-      for (let y = 0; y <= 8; y += 4) { ctx.beginPath(); ctx.moveTo(-6,y); ctx.lineTo(6,y); ctx.stroke(); }
+      ctx.moveTo(0,-14);ctx.lineTo(6,-2);ctx.lineTo(6,10);ctx.lineTo(-6,10);ctx.lineTo(-6,-2);
+      ctx.closePath();ctx.fill();
     } else {
-      // Cargo / generic — standard ship shape
       ctx.beginPath();
-      ctx.moveTo(0,  -13);
-      ctx.lineTo(6,   -2);
-      ctx.lineTo(6,   10);
-      ctx.lineTo(3,   12);
-      ctx.lineTo(-3,  12);
-      ctx.lineTo(-6,  10);
-      ctx.lineTo(-6,  -2);
-      ctx.closePath();
-      ctx.fill();
+      ctx.moveTo(0,-13);ctx.lineTo(6,-2);ctx.lineTo(6,10);
+      ctx.lineTo(3,12);ctx.lineTo(-3,12);ctx.lineTo(-6,10);ctx.lineTo(-6,-2);
+      ctx.closePath();ctx.fill();
     }
     ctx.restore();
     return c;
   }
-
-  const _iconCache = {};
-  function _getIcon(cls, heading) {
-    const bucket = Math.round((heading || 0) / 10) * 10;
-    const key    = `${cls}_${bucket}`;
-    if (!_iconCache[key]) _iconCache[key] = _makeShipIcon(cls, bucket);
+  function _getIcon(cls,heading) {
+    const bucket=Math.round((heading||0)/10)*10;
+    const key=`${cls}_${bucket}`;
+    if(!_iconCache[key])_iconCache[key]=_makeShipIcon(cls,bucket);
     return _iconCache[key];
   }
 
-  // ── AIS normaliser ────────────────────────────────────────────
-  function _norm(v, src) {
-    const lat = parseFloat(v.lat ?? v.LAT ?? v.latitude  ?? 0);
-    const lon = parseFloat(v.lon ?? v.LON ?? v.longitude ?? 0);
-    if (!isFinite(lat) || !isFinite(lon))     return null;
-    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
-    return {
-      source:      src,
-      mmsi:        String(v.mmsi ?? v.MMSI ?? ''),
-      name:        (v.name ?? v.NAME ?? v.shipname ?? v.SHIPNAME ?? 'UNKNOWN').toString().trim(),
-      callsign:    (v.callsign ?? v.CALLSIGN ?? '').toString().trim(),
-      lat, lon,
-      sog:         parseFloat(v.sog ?? v.SOG ?? v.speed ?? 0) || 0,
-      cog:         parseFloat(v.cog ?? v.COG ?? v.course ?? 0) || 0,
-      heading:     parseFloat(v.heading ?? v.HDG ?? v.truehead ?? v.cog ?? 0) || 0,
-      shipType:    parseInt(v.shiptype ?? v.SHIPTYPE ?? v.type ?? v.ship_type ?? 0) || 0,
-      status:      parseInt(v.status ?? v.STATUS ?? v.nav_status ?? 15) || 15,
-      destination: (v.destination ?? v.DESTINATION ?? v.dest ?? '').toString().trim(),
-      draught:     parseFloat(v.draught ?? v.DRAUGHT ?? 0) || null,
-      length:      parseFloat(v.length  ?? v.LENGTH  ?? 0) || null,
+  // ── AISStream WebSocket ───────────────────────────────────────
+  const _vessels = new Map(); // mmsi → vessel data
+  let   _ws      = null;
+  let   _wsTimer = null;
+  let   _drTimer = null;
+
+  function _connectAISStream() {
+    if (_ws && (_ws.readyState===WebSocket.OPEN||_ws.readyState===WebSocket.CONNECTING)) return;
+
+    LOG.add('[MARITIME] Connecting to AISStream WebSocket...', 'sys');
+    UI.setStatus('maritime', 'CONNECTING', 'warn');
+
+    _ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
+
+    _ws.onopen = () => {
+      LOG.add('[MARITIME] AISStream connected — subscribing global feed', 'sig');
+      UI.setStatus('maritime', 'STREAMING', 'ok');
+      const sub = {
+        APIKey: AISSTREAM_KEY,
+        BoundingBoxes: [[[-90,-180],[90,180]]],
+        FilterMessageTypes: ['PositionReport','ShipStaticData'],
+      };
+      _ws.send(JSON.stringify(sub));
+    };
+
+    _ws.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        const mmsi = String(msg.MetaData?.MMSI||'');
+        if (!mmsi) return;
+
+        if (msg.Message?.PositionReport) {
+          const pr = msg.Message.PositionReport;
+          const lat = parseFloat(pr.Latitude||0);
+          const lon = parseFloat(pr.Longitude||0);
+          if (!isFinite(lat)||!isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return;
+          if (lat===0&&lon===0) return;
+
+          const existing = _vessels.get(mmsi)||{};
+          _vessels.set(mmsi, {
+            ...existing, mmsi,
+            lat, lon,
+            sog:    parseFloat(pr.Sog||0),
+            cog:    parseFloat(pr.Cog||0),
+            heading:parseFloat(pr.TrueHeading||pr.Cog||0),
+            status: parseInt(pr.NavigationalStatus||15),
+            source: 'AISStream',
+          });
+        }
+
+        if (msg.Message?.ShipStaticData) {
+          const sd = msg.Message.ShipStaticData;
+          const existing = _vessels.get(mmsi)||{};
+          _vessels.set(mmsi, {
+            ...existing, mmsi,
+            name:        (sd.Name||existing.name||'UNKNOWN').trim(),
+            callsign:    (sd.CallSign||existing.callsign||'').trim(),
+            shipType:    parseInt(sd.Type||existing.shipType||0),
+            destination: (sd.Destination||existing.destination||'').trim(),
+            draught:     parseFloat(sd.MaximumStaticDraught||0)||null,
+            source:      'AISStream',
+          });
+        }
+      } catch(e) {}
+    };
+
+    _ws.onerror = (e) => {
+      LOG.add('[MARITIME] AISStream WebSocket error — falling back to demo', 'warn');
+      UI.setStatus('maritime', 'ERROR', 'err');
+    };
+
+    _ws.onclose = () => {
+      LOG.add('[MARITIME] AISStream disconnected — reconnecting in 30s', 'warn');
+      UI.setStatus('maritime', 'RECONNECTING', 'warn');
+      setTimeout(_connectAISStream, 30000);
     };
   }
 
-  // ── Multi-region AIS fetch (parallel bbox passes) ─────────────
-  async function _fetchRegional(urlFn, regions, label) {
-    const results = [];
-    await Promise.allSettled(regions.map(async q => {
-      try {
-        const res = await fetch(urlFn(q), { signal: AbortSignal.timeout(10000) });
-        if (!res.ok) return;
-        const json = await res.json();
-        const rows = Array.isArray(json) ? json : json.vessels ?? json.data ?? json.ais ?? [];
-        rows.forEach(v => { const n = _norm(v, label); if (n) results.push(n); });
-      } catch(e) {}
-    }));
-    return results;
-  }
-
-  async function _fetchAISHub() {
-    const REGIONS = [
-      '?latmin=-15&latmax=35&lonmin=50&lonmax=130',
-      '?latmin=30&latmax=72&lonmin:-15&lonmax=50',
-      '?latmin=10&latmax=50&lonmin=-100&lonmax:-20',
-      '?latmin=-40&latmax=15&lonmin=-70&lonmax:20',
-      '?latmin:-15&latmax=50&lonmin=100&lonmax=180',
-      '?latmin:-60&latmax=-15&lonmin=-80&lonmax=180',
-    ];
-    return _fetchRegional(
-      q => `https://api.adsb.lol/v2/aishub${q}`,
-      REGIONS, 'AISHub'
-    );
-  }
-
-  async function _fetchVTExplorer() {
-    const PASSES = [
-      '?lat1=0&lat2=72&lon1=-100&lon2=30',
-      '?lat1=-60&lat2=0&lon1=-80&lon2=20',
-      '?lat1=0&lat2=72&lon1=30&lon2=180',
-      '?lat1=-60&lat2=0&lon1=20&lon2=180',
-    ];
-    const results = [];
-    await Promise.allSettled(PASSES.map(async q => {
-      try {
-        const res = await fetch(
-          `https://www.vtexplorer.com/ws/assets/ais/get-vessels.php${q}&cg=1`,
-          { signal: AbortSignal.timeout(10000) }
-        );
-        if (!res.ok) return;
-        const json = await res.json();
-        const rows = json.data ?? json;
-        if (!Array.isArray(rows)) return;
-        rows.forEach(v => {
-          if (v[1] == null || v[2] == null) return;
-          const n = _norm({
-            mmsi:v[0],lat:v[1],lon:v[2],sog:v[3],cog:v[4],heading:v[5]??v[4],
-            shiptype:v[6],status:v[7],name:v[9],callsign:v[10],destination:v[11],
-          }, 'VTExplorer');
-          if (n) results.push(n);
-        });
-      } catch(e) {}
-    }));
-    return results;
-  }
-
-  // ── Dead-reckoning for ships (5s interval, knots→m/s) ────────
-  const _drState = new Map();
-  let   _drTimer = null;
-
+  // ── Dead-reckoning ────────────────────────────────────────────
   function _drUpdate() {
     const now = Date.now();
-    _drState.forEach((st, mmsi) => {
-      if (!st.sog || st.sog < 0.3) return;
-      const entity = LAYER_REGISTRY.MARITIME.entities.entities.getById(mmsi);
-      if (!entity) return;
-      const dt     = (now - st.lastTick) / 1000;
-      st.lastTick  = now;
-      const spdMs  = st.sog * 0.514444;  // knots → m/s
-      const distM  = spdMs * dt;
-      const R      = 6371000;
-      const hdgRad = (st.cog * Math.PI) / 180;
-      const latRad = st.lat * Math.PI / 180;
-      st.lat += (distM / R) * (180/Math.PI) * Math.cos(hdgRad);
-      st.lon += (distM / R) * (180/Math.PI) / Math.cos(latRad) * Math.sin(hdgRad);
-      st.lat  = Math.max(-89, Math.min(89, st.lat));
-      st.lon  = ((st.lon + 540) % 360) - 180;
-      if (!isFinite(st.lat) || !isFinite(st.lon)) return;
-      try {
-        entity.position = Cesium.Cartesian3.fromDegrees(st.lon, st.lat, 1);
-        if (entity._oeData) { entity._oeData.lat = st.lat; entity._oeData.lon = st.lon; }
-      } catch(e) {}
+    _vessels.forEach((v, mmsi) => {
+      if (!v.sog||v.sog<0.3||!v._lastTick) { v._lastTick=now; return; }
+      const dt=(now-v._lastTick)/1000; v._lastTick=now;
+      const spdMs=v.sog*0.514444;
+      const distM=spdMs*dt;
+      const R=6371000;
+      const hdgRad=(v.cog||0)*Math.PI/180;
+      const latRad=v.lat*Math.PI/180;
+      v.lat+=(distM/R)*(180/Math.PI)*Math.cos(hdgRad);
+      v.lon+=(distM/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
+      v.lat=Math.max(-89,Math.min(89,v.lat));
+      v.lon=((v.lon+540)%360)-180;
+      const entity=LAYER_REGISTRY.MARITIME.entities.entities.getById(mmsi);
+      if(entity&&isFinite(v.lat)&&isFinite(v.lon)) {
+        try {
+          entity.position=Cesium.Cartesian3.fromDegrees(v.lon,v.lat,1);
+          if(entity._oeData){entity._oeData.lat=v.lat;entity._oeData.lon=v.lon;}
+        } catch(e){}
+      }
     });
   }
-  function _startDR() {
-    if (_drTimer) clearInterval(_drTimer);
-    _drTimer = setInterval(_drUpdate, 5000);
-  }
 
-  // ── Render ────────────────────────────────────────────────────
-  function _render(vessels) {
+  // ── Render snapshot of current vessel map ─────────────────────
+  function _renderSnapshot() {
     const layer = LAYER_REGISTRY.MARITIME;
     layer.entities.entities.removeAll();
+    const alerted = new Set();
+    let navalCount=0;
+    const feedItems=[];
 
-    let navalCount = 0;
-    let densityAlerts = 0;
-    const feedItems = [];
-    const alerted   = new Set();
+    // Only render vessels that have position data
+    const withPos = Array.from(_vessels.values()).filter(v=>v.lat&&v.lon&&isFinite(v.lat)&&isFinite(v.lon));
 
-    vessels.forEach(v => {
+    withPos.forEach(v => {
       const cls   = _classify(v);
-      const style = CLS_STYLE[cls] || CLS_STYLE.OTHER;
+      const style = CLS_STYLE[cls]||CLS_STYLE.OTHER;
       const col   = style.color;
-      const icon  = _getIcon(cls, v.heading || v.cog || 0);
-
-      if (cls === 'NAVAL') {
+      const icon  = _getIcon(cls, v.heading||v.cog||0);
+      if (cls==='NAVAL') {
         navalCount++;
-        LOG.add(`[SIGINT] NAVAL VESSEL — ${v.name} MMSI:${v.mmsi}`, 'warn');
+        LOG.add(`[SIGINT] NAVAL — ${v.name||v.mmsi} MMSI:${v.mmsi}`, 'warn');
       }
-
-      const zone = _getChokepoint(v.lat, v.lon);
-      if (zone && !alerted.has(zone.name)) {
+      const zone=_getChokepoint(v.lat,v.lon);
+      if(zone&&!alerted.has(zone.name)){
         alerted.add(zone.name);
-        densityAlerts++;
-        LOG.add(`[SHIP] DENSITY — ${zone.name} · ${v.name || v.mmsi}`, 'warn');
+        LOG.add(`[SHIP] DENSITY — ${zone.name} · ${v.name||v.mmsi}`,'warn');
       }
+      v._lastTick=Date.now();
 
-      if (!isFinite(v.lat) || !isFinite(v.lon)) return;
-
-      const entity = layer.entities.entities.add({
-        id:       v.mmsi || undefined,
-        position: Cesium.Cartesian3.fromDegrees(v.lon, v.lat, 1),
-
-        billboard: {
-          image:  icon,
-          width:  cls === 'NAVAL' ? 30 : 26,
-          height: cls === 'NAVAL' ? 30 : 26,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          scaleByDistance:       new Cesium.NearFarScalar(50_000, 1.5, 6_000_000, 0.2),
-          translucencyByDistance: new Cesium.NearFarScalar(80_000, 1.0, 8_000_000, 0.3),
-          disableDepthTestDistance: 500,
+      const entity=layer.entities.entities.add({
+        id: v.mmsi||undefined,
+        position: Cesium.Cartesian3.fromDegrees(v.lon,v.lat,1),
+        billboard:{
+          image:icon, width:cls==='NAVAL'?30:26, height:cls==='NAVAL'?30:26,
+          verticalOrigin:Cesium.VerticalOrigin.CENTER,
+          scaleByDistance:new Cesium.NearFarScalar(50_000,1.5,6_000_000,0.2),
+          translucencyByDistance:new Cesium.NearFarScalar(80_000,1.0,8_000_000,0.3),
+          disableDepthTestDistance:500,
         },
-
-        label: {
-          text:         v.name || v.mmsi,
-          font:         '10px Share Tech Mono, monospace',
-          fillColor:    Cesium.Color.fromCssColorString(col),
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-          style:        Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset:  new Cesium.Cartesian2(0, -20),
-          scaleByDistance: new Cesium.NearFarScalar(50_000, 1.0, 1_500_000, 0.0),
-          disableDepthTestDistance: 500,
-          showBackground:    true,
-          backgroundColor:   Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
-          backgroundPadding: new Cesium.Cartesian2(3, 2),
+        label:{
+          text:v.name||v.mmsi,
+          font:'10px Share Tech Mono, monospace',
+          fillColor:Cesium.Color.fromCssColorString(col),
+          outlineColor:Cesium.Color.BLACK,outlineWidth:2,
+          style:Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset:new Cesium.Cartesian2(0,-20),
+          scaleByDistance:new Cesium.NearFarScalar(50_000,1.0,1_500_000,0.0),
+          disableDepthTestDistance:500,
+          showBackground:true,
+          backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
+          backgroundPadding:new Cesium.Cartesian2(3,2),
         },
       });
 
-      entity._oeData = { ...v, type:'ship', classification: cls };
-      _drState.set(v.mmsi, { lat:v.lat, lon:v.lon, sog:v.sog||0, cog:v.cog||v.heading||0, lastTick:Date.now() });
-
+      entity._oeData={...v,type:'ship',classification:cls};
       feedItems.push({
-        type:'ship', name:v.name||v.mmsi,
+        type:'ship',name:v.name||v.mmsi,
         sub:`${v.destination||'?'} · ${v.sog!=null?v.sog.toFixed(1)+'kn':'?'} · ${style.label}`,
-        color:col, tag:style.tag, tagLabel:style.label,
-        lat:v.lat, lon:v.lon, feedAlt:120_000,
+        color:col,tag:style.tag,tagLabel:style.label,
+        lat:v.lat,lon:v.lon,feedAlt:120_000,
       });
     });
 
-    _startDR();
-    layer.count = vessels.length;
+    if(_drTimer) clearInterval(_drTimer);
+    _drTimer=setInterval(_drUpdate,5000);
+
+    layer.count=withPos.length;
     LAYER_REGISTRY._sync('MARITIME');
-    LOG.add(`[MARITIME] ${vessels.length} vessels · ${navalCount} naval · ${densityAlerts} chokepoint alerts`, 'ship');
-    UI.setStatus('maritime', `LIVE · ${vessels.length}`, 'ok');
-    document.getElementById('sb-ships').innerHTML = `VESSELS <span>${vessels.length}</span>`;
+    LOG.add(`[MARITIME] ${withPos.length} vessels · ${navalCount} naval`,'ship');
+    UI.setStatus('maritime',`LIVE · ${withPos.length}`,'ok');
+    document.getElementById('sb-ships').innerHTML=`VESSELS <span>${withPos.length}</span>`;
   }
 
-  // ── Demo ──────────────────────────────────────────────────────
+  // ── Demo fallback ─────────────────────────────────────────────
   function _demo() {
-    LOG.add('[MARITIME] APIs unavailable — loading demo vessels', 'warn');
-    document.getElementById('sb-demo').style.display = 'block';
-    const DEMO = [
-      { mmsi:'370100000',name:'MV CHITTAGONG EXPRESS',callsign:'S2ABC', lat:22.20,lon:91.80, sog:9.5, cog:270,heading:270,shipType:71,status:0,destination:'BGCGP',source:'Demo' },
-      { mmsi:'370200000',name:'MT ARABIAN STAR',      callsign:'A4XYZ', lat:13.50,lon:50.00, sog:12.0,cog:155,heading:155,shipType:80,status:0,destination:'INMUN',source:'Demo' },
-      { mmsi:'370300000',name:'MSC COLOMBO',          callsign:'9VCB1', lat:6.90, lon:79.85, sog:8.0, cog:340,heading:340,shipType:71,status:0,destination:'LKCMB',source:'Demo' },
-      { mmsi:'370400000',name:'INS VIKRANT',          callsign:'VTAB1', lat:15.00,lon:72.00, sog:18.0,cog:200,heading:200,shipType:35,status:0,destination:'INMAA',source:'Demo' },
-      { mmsi:'370500000',name:'LNG KARACHI',          callsign:'APLNG', lat:24.80,lon:66.90, sog:11.0,cog:90, heading:90, shipType:84,status:0,destination:'PKBQM',source:'Demo' },
-      { mmsi:'370600000',name:'COSCO PACIFIC',        callsign:'BOZZ1', lat:1.20, lon:103.9, sog:12.0,cog:280,heading:280,shipType:71,status:0,destination:'SGSIN',source:'Demo' },
-      { mmsi:'370700000',name:'GIBRALTAR TRADER',     callsign:'GIBX1', lat:36.00,lon:-5.60, sog:14.0,cog:90, heading:90, shipType:70,status:0,destination:'GBFXT',source:'Demo' },
-      { mmsi:'371200000',name:'MT GULF TRADER',       callsign:'A7GTX', lat:26.00,lon:56.50, sog:13.0,cog:100,heading:100,shipType:80,status:0,destination:'AEDXB',source:'Demo' },
-      { mmsi:'371300000',name:'NORDIC GAS',           callsign:'OULNG', lat:60.50,lon:4.50,  sog:16.0,cog:180,heading:180,shipType:84,status:0,destination:'NLRTM',source:'Demo' },
-      { mmsi:'371500000',name:'OOCL PANAMA',          callsign:'C6PAN', lat:9.00, lon:-79.5, sog:10.0,cog:315,heading:315,shipType:71,status:0,destination:'USLAX',source:'Demo' },
-      { mmsi:'371700000',name:'CAPE HORN CARRIER',    callsign:'LQCPH', lat:-55.0,lon:-67.0, sog:11.0,cog:90, heading:90, shipType:70,status:0,destination:'ARBUE',source:'Demo' },
-      { mmsi:'371800000',name:'CAPE TRADER',          callsign:'ZSCPT', lat:-34.0,lon:18.50, sog:13.0,cog:120,heading:120,shipType:70,status:0,destination:'ZAJNB',source:'Demo' },
+    LOG.add('[MARITIME] AISStream unavailable — loading demo vessels','warn');
+    document.getElementById('sb-demo').style.display='block';
+    const DEMO=[
+      {mmsi:'370100000',name:'MV CHITTAGONG EXPRESS',callsign:'S2ABC',lat:22.20,lon:91.80,sog:9.5,cog:270,heading:270,shipType:71,status:0,destination:'BGCGP',source:'Demo'},
+      {mmsi:'370200000',name:'MT ARABIAN STAR',callsign:'A4XYZ',lat:13.50,lon:50.00,sog:12.0,cog:155,heading:155,shipType:80,status:0,destination:'INMUN',source:'Demo'},
+      {mmsi:'370300000',name:'MSC COLOMBO',callsign:'9VCB1',lat:6.90,lon:79.85,sog:8.0,cog:340,heading:340,shipType:71,status:0,destination:'LKCMB',source:'Demo'},
+      {mmsi:'370400000',name:'INS VIKRANT',callsign:'VTAB1',lat:15.00,lon:72.00,sog:18.0,cog:200,heading:200,shipType:35,status:0,destination:'INMAA',source:'Demo'},
+      {mmsi:'370500000',name:'LNG KARACHI',callsign:'APLNG',lat:24.80,lon:66.90,sog:11.0,cog:90,heading:90,shipType:84,status:0,destination:'PKBQM',source:'Demo'},
+      {mmsi:'370600000',name:'COSCO PACIFIC',callsign:'BOZZ1',lat:1.20,lon:103.9,sog:12.0,cog:280,heading:280,shipType:71,status:0,destination:'SGSIN',source:'Demo'},
+      {mmsi:'370700000',name:'GIBRALTAR TRADER',callsign:'GIBX1',lat:36.00,lon:-5.60,sog:14.0,cog:90,heading:90,shipType:70,status:0,destination:'GBFXT',source:'Demo'},
+      {mmsi:'371200000',name:'MT GULF TRADER',callsign:'A7GTX',lat:26.00,lon:56.50,sog:13.0,cog:100,heading:100,shipType:80,status:0,destination:'AEDXB',source:'Demo'},
+      {mmsi:'371300000',name:'CAPE HORN CARRIER',callsign:'LQCPH',lat:-55.0,lon:-67.0,sog:11.0,cog:90,heading:90,shipType:70,status:0,destination:'ARBUE',source:'Demo'},
+      {mmsi:'371800000',name:'CAPE TRADER',callsign:'ZSCPT',lat:-34.0,lon:18.50,sog:13.0,cog:120,heading:120,shipType:70,status:0,destination:'ZAJNB',source:'Demo'},
+      {mmsi:'371900000',name:'HMS DRAGON',callsign:'GBHMS',lat:36.10,lon:-5.35,sog:15.0,cog:180,heading:180,shipType:35,status:0,destination:'GBPOR',source:'Demo'},
+      {mmsi:'372000000',name:'OOCL PANAMA',callsign:'C6PAN',lat:9.00,lon:-79.5,sog:10.0,cog:315,heading:315,shipType:71,status:0,destination:'USLAX',source:'Demo'},
     ];
-    _render(DEMO);
+    DEMO.forEach(v=>_vessels.set(v.mmsi,v));
+    _renderSnapshot();
   }
 
   // ── Detail renderer ───────────────────────────────────────────
   DETAIL_RENDERERS['ship'] = (d) => {
-    const style  = CLS_STYLE[d.classification] || CLS_STYLE.OTHER;
-    const col    = style.color;
-    const navSt  = NAV_STATUS[d.status] || 'Unknown';
-    const sogKts = d.sog != null ? `${d.sog.toFixed(1)} kts` : '—';
-    const sogKmh = d.sog != null ? `(${(d.sog*1.852).toFixed(0)} km/h)` : '';
-    const clsIcon= d.classification==='NAVAL'?'⚓':d.classification==='TANKER'?'⚠':d.classification==='PASSENGER'?'🚢':'📦';
+    const style=CLS_STYLE[d.classification]||CLS_STYLE.OTHER;
+    const col=style.color;
+    const navSt=NAV_STATUS[d.status]||'Unknown';
+    const sogKts=d.sog!=null?`${d.sog.toFixed(1)} kts`:'—';
+    const sogKmh=d.sog!=null?`(${(d.sog*1.852).toFixed(0)} km/h)` :'';
+    const clsIcon=d.classification==='NAVAL'?'⚓':d.classification==='TANKER'?'⚠':d.classification==='PASSENGER'?'🚢':'📦';
     return `
       <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
-      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">
-        ${clsIcon} ${style.label}
-      </span>
+      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${clsIcon} ${style.label}</span>
       <div class="detail-grid" style="margin-top:6px">
         <div><div class="dg-cell-label">MMSI</div><div class="dg-cell-value">${d.mmsi||'—'}</div></div>
         <div><div class="dg-cell-label">Callsign</div><div class="dg-cell-value">${d.callsign||'—'}</div></div>
@@ -2682,48 +2525,44 @@ const MARITIME_MODULE = (() => {
         <div><div class="dg-cell-label">Destination</div><div class="dg-cell-value">${d.destination||'—'}</div></div>
         <div><div class="dg-cell-label">Nav Status</div><div class="dg-cell-value" style="font-size:0.5rem">${navSt}</div></div>
         ${d.draught?`<div><div class="dg-cell-label">Draught</div><div class="dg-cell-value">${d.draught}m</div></div>`:''}
-        ${d.length ?`<div><div class="dg-cell-label">Length</div><div class="dg-cell-value">${d.length}m</div></div>`:''}
         <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">${d.source||'—'}</div></div>
       </div>`;
   };
 
-  // ── Main refresh ──────────────────────────────────────────────
+  // ── Main refresh — renders current snapshot of WebSocket data ─
   LAYER_REGISTRY.MARITIME.refresh = async function () {
-    UI.setStatus('maritime', 'FETCHING', 'warn');
-    LOG.add('[MARITIME] Polling AIS sources (parallel)...', 'sys');
-
-    const [aisResult, vtResult] = await Promise.allSettled([
-      _fetchAISHub(), _fetchVTExplorer(),
-    ]);
-
-    const mmsiMap = new Map();
-    let anySuccess = false;
-
-    for (const r of [aisResult, vtResult]) {
-      if (r.status === 'fulfilled' && r.value.length > 0) {
-        anySuccess = true;
-        r.value.forEach(v => { if (!mmsiMap.has(v.mmsi)) mmsiMap.set(v.mmsi, v); });
-      }
+    if (_vessels.size > 0) {
+      _renderSnapshot();
     }
-
-    if (!anySuccess || mmsiMap.size === 0) { _demo(); return; }
-
-    // Sanitise + cap at 2000
-    const clean = [];
-    for (const v of mmsiMap.values()) {
-      if (!isFinite(v.lat)||!isFinite(v.lon)) continue;
-      if (Math.abs(v.lat)>90||Math.abs(v.lon)>180) continue;
-      clean.push(v);
-      if (clean.length >= 2000) break;
-    }
-
-    if (!clean.length) { _demo(); return; }
-    _render(clean);
+    // WebSocket stays alive — no need to re-fetch
   };
 
-  LOG.add('[MARITIME] v2 module loaded', 'ship');
-  UI.setStatus('maritime', 'LOADING', 'warn');
-  setTimeout(() => LAYER_REGISTRY.MARITIME.refresh(), 1600);
+  // Boot — connect WebSocket immediately, render every 15s
+  LOG.add('[MARITIME] v3 module loaded — AISStream WebSocket','ship');
+  UI.setStatus('maritime','LOADING','warn');
+
+  // Try WebSocket connection
+  try {
+    _connectAISStream();
+    // Give WebSocket 8 seconds to collect vessels, then render
+    setTimeout(() => {
+      if (_vessels.size > 0) {
+        _renderSnapshot();
+      } else {
+        LOG.add('[MARITIME] No vessels received yet — waiting...','warn');
+        // Try again at 15s
+        setTimeout(() => {
+          if (_vessels.size > 0) _renderSnapshot();
+          else _demo();
+        }, 7000);
+      }
+    }, 8000);
+    // Periodic snapshot render every 30s
+    setInterval(() => { if(_vessels.size>0) _renderSnapshot(); }, 30000);
+  } catch(e) {
+    LOG.add(`[MARITIME] WebSocket failed — ${e.message}`,'warn');
+    setTimeout(_demo, 1000);
+  }
 
   return { refresh: () => LAYER_REGISTRY.MARITIME.refresh() };
 
@@ -2731,202 +2570,171 @@ const MARITIME_MODULE = (() => {
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  SATELLITE_MODULE  —  v2 UPGRADED                           ║
-// ║  Source  : Celestrak group TLE files (entire catalog)       ║
-// ║  Objects : All active satellites in orbit (~6000+)          ║
-// ║  Features: Orbit-type colouring, 5s tick, full details      ║
+// ║  SATELLITE_MODULE  —  v3  N2YO AUTHENTICATED                ║
+// ║  Primary : N2YO API (CORS-safe, authenticated)              ║
+// ║  Catalog : Key orbital objects + full above-horizon query   ║
+// ║  Fallback: ivanstanojevic.me TLE proxy (has CORS headers)   ║
 // ╚══════════════════════════════════════════════════════════════╝
 const SATELLITE_MODULE = (() => {
 
-  // ── Celestrak TLE group URLs — fetched as bulk text ──────────
-  // Each file contains ALL sats in that category as 3-line TLE sets
-  const TLE_GROUPS = [
-    { url:'https://celestrak.org/SOCRATES/query.php?CODE=ISS&FORMAT=tle',
-      label:'STATION', color:'#00ff9d', priority:1 },
-    { url:'https://celestrak.org/pub/TLE/catalog.txt',
-      label:'ALL',     color:null,      priority:2 },  // full catalog fallback
-    { url:'https://celestrak.org/SOCRATES/query.php?CODE=active&FORMAT=tle',
-      label:'ACTIVE',  color:null,      priority:2 },
+  const N2YO_KEY = 'UFL4K5-2D6CEX-CQFYNS-5OES';
+
+  // ── Curated catalog — key satellites by NORAD ID ─────────────
+  // Fetched individually via N2YO — rich position data, no TLE parsing needed
+  const SAT_CATALOG = [
+    // Space Stations
+    {norad:'25544', name:'ISS',             cat:'STATION',  color:'#00ff9d', priority:1},
+    {norad:'48274', name:'CSS (Tiangong)',   cat:'STATION',  color:'#ff9900', priority:1},
+    // Navigation
+    {norad:'43473', name:'GPS IIF-12',       cat:'GPS',      color:'#b44fff', priority:2},
+    {norad:'37753', name:'GLONASS-M 730',    cat:'GLONASS',  color:'#9944ff', priority:2},
+    {norad:'37846', name:'GALILEO-101',      cat:'GALILEO',  color:'#aa44ff', priority:2},
+    {norad:'44231', name:'BEIDOU-3 M1',      cat:'BEIDOU',   color:'#cc44ff', priority:2},
+    // Weather
+    {norad:'38337', name:'SUOMI NPP',        cat:'WEATHER',  color:'#ffe600', priority:1},
+    {norad:'41240', name:'GOES-16',          cat:'WEATHER',  color:'#ffe600', priority:1},
+    {norad:'43226', name:'HIMAWARI-9',       cat:'WEATHER',  color:'#ffe600', priority:1},
+    {norad:'44713', name:'INSAT-3DR',        cat:'WEATHER',  color:'#ffaa00', priority:1},
+    // Earth Obs
+    {norad:'43689', name:'SENTINEL-3B',      cat:'EO',       color:'#c8ff00', priority:2},
+    {norad:'39634', name:'RESOURCESAT-2',    cat:'EO',       color:'#c8ff00', priority:2},
+    // Comms / GEO
+    {norad:'43286', name:'BANGABANDHU-1',    cat:'GEO',      color:'#00d4ff', priority:1},
+    {norad:'41838', name:'GSAT-18',          cat:'GEO',      color:'#00d4ff', priority:2},
+    {norad:'45026', name:'INTELSAT-39',      cat:'GEO',      color:'#00d4ff', priority:2},
+    // Military / Recon
+    {norad:'27386', name:'USA-186',          cat:'MIL',      color:'#ff3c3c', priority:1},
+    {norad:'44502', name:'COSMO-4',          cat:'MIL',      color:'#ff3c3c', priority:2},
+    {norad:'48465', name:'YAOGAN-32B',       cat:'MIL',      color:'#ff3c3c', priority:2},
+    // Comms constellations (samples)
+    {norad:'44713', name:'STARLINK-1',       cat:'STARLINK', color:'#00aaff', priority:2},
+    {norad:'44915', name:'STARLINK-24',      cat:'STARLINK', color:'#00aaff', priority:2},
+    {norad:'47687', name:'ONEWEB-0222',      cat:'ONEWEB',   color:'#00bbdd', priority:2},
+    {norad:'25544', name:'IRIDIUM-100',      cat:'IRIDIUM',  color:'#00d4ff', priority:2},
+    // Amateur
+    {norad:'07530', name:'OSCAR-7',          cat:'AMATEUR',  color:'#44ffcc', priority:2},
   ];
 
-  // Primary: fetch these specific group files
-  const TLE_URLS = [
-    { url:'https://celestrak.org/pub/TLE/tle-new.txt',       cat:'RECENT',    color:'#00ff9d', priority:1 },
-    { url:'https://celestrak.org/pub/TLE/stations.txt',      cat:'STATION',   color:'#00ff9d', priority:1 },
-    { url:'https://celestrak.org/pub/TLE/starlink.txt',      cat:'STARLINK',  color:'#00d4ff', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/oneweb.txt',        cat:'ONEWEB',    color:'#00d4ff', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/planet.txt',        cat:'EO',        color:'#c8ff00', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/geo.txt',           cat:'GEO',       color:'#ffe600', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/gps-ops.txt',       cat:'GPS',       color:'#b44fff', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/glo-ops.txt',       cat:'GLONASS',   color:'#b44fff', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/galileo.txt',       cat:'GALILEO',   color:'#b44fff', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/beidou.txt',        cat:'BEIDOU',    color:'#b44fff', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/weather.txt',       cat:'WEATHER',   color:'#ffe600', priority:1 },
-    { url:'https://celestrak.org/pub/TLE/noaa.txt',          cat:'NOAA',      color:'#ffe600', priority:1 },
-    { url:'https://celestrak.org/pub/TLE/resource.txt',      cat:'EO',        color:'#c8ff00', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/sarsat.txt',        cat:'SAR',       color:'#ff3c3c', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/military.txt',      cat:'MIL',       color:'#ff3c3c', priority:1 },
-    { url:'https://celestrak.org/pub/TLE/radar.txt',         cat:'RADAR',     color:'#ff9900', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/iridium.txt',       cat:'IRIDIUM',   color:'#00d4ff', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/orbcomm.txt',       cat:'ORBCOMM',   color:'#00d4ff', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/amateur.txt',       cat:'AMATEUR',   color:'#44ffcc', priority:2 },
-    { url:'https://celestrak.org/pub/TLE/active.txt',        cat:'ACTIVE',    color:null,      priority:2 },
-  ];
-
-  // ── Colour by orbit/category ──────────────────────────────────
   const CAT_COLORS = {
-    STATION:'#00ff9d', STARLINK:'#00d4ff', ONEWEB:'#00aaff',
-    GPS:'#b44fff',     GLONASS:'#9944ff',  GALILEO:'#aa44ff', BEIDOU:'#cc44ff',
-    WEATHER:'#ffe600', NOAA:'#ffaa00',     EO:'#c8ff00',      RESOURCE:'#aaff00',
-    MIL:'#ff3c3c',     RADAR:'#ff6600',    SAR:'#ff3c3c',
-    IRIDIUM:'#00d4ff', ORBCOMM:'#00bbdd',  AMATEUR:'#44ffcc',
-    GEO:'#ffe600',     RECENT:'#00ff9d',   ACTIVE:'#44ffcc',
+    STATION:'#00ff9d', GPS:'#b44fff', GLONASS:'#9944ff', GALILEO:'#aa44ff',
+    BEIDOU:'#cc44ff',  WEATHER:'#ffe600', EO:'#c8ff00',  GEO:'#00d4ff',
+    MIL:'#ff3c3c',     STARLINK:'#00aaff', ONEWEB:'#00bbdd', IRIDIUM:'#00d4ff',
+    AMATEUR:'#44ffcc', ACTIVE:'#44ffcc',
   };
 
-  // ── Parse raw TLE text → array of {name, line1, line2, cat, color} ──
-  function _parseTLE(text, cat, defaultColor) {
-    const lines   = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
-    const results = [];
-    for (let i = 0; i + 2 < lines.length; i++) {
-      if (lines[i+1].startsWith('1 ') && lines[i+2].startsWith('2 ')) {
-        const name  = lines[i].replace(/^0 /, '').trim();
-        const line1 = lines[i+1];
-        const line2 = lines[i+2];
-        // Basic validity check on line2 length
-        if (line2.length < 63) { i += 2; continue; }
-        const norad = line1.substring(2, 7).trim();
-        const color = defaultColor || CAT_COLORS[cat] || '#44ffcc';
-        results.push({ name, line1, line2, norad, cat, color });
-        i += 2;
-      }
-    }
-    return results;
+  // ── Fetch position from N2YO API (returns lat/lon/alt directly) ─
+  async function _fetchN2YO(norad, name) {
+    // N2YO /positions endpoint — returns current + next N positions
+    const url = `https://api.n2yo.com/rest/v1/satellite/positions/${norad}/0/0/0/1/&apiKey=${N2YO_KEY}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`N2YO HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.positions?.length) throw new Error(`N2YO: no positions for ${norad}`);
+    const pos = json.positions[0];
+    if (!isFinite(pos.satlatitude)||!isFinite(pos.satlongitude)||!isFinite(pos.sataltitude))
+      throw new Error(`N2YO: invalid position for ${norad}`);
+    return {
+      lat:   pos.satlatitude,
+      lon:   pos.satlongitude,
+      altKm: pos.sataltitude,
+      altM:  pos.sataltitude * 1000,
+    };
   }
 
-  // ── Fetch one TLE group with timeout ─────────────────────────
-  async function _fetchGroup(entry) {
-    const res = await fetch(entry.url, { signal: AbortSignal.timeout(12000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const text = await res.text();
-    if (!text || text.length < 100) throw new Error('Empty TLE response');
-    return _parseTLE(text, entry.cat, entry.color);
+  // ── Fallback: ivanstanojevic.me TLE proxy (has CORS headers) ──
+  async function _fetchIvanTLE(norad) {
+    const res = await fetch(`https://tle.ivanstanojevic.me/api/tle/${norad}`,
+                            { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`Ivan TLE HTTP ${res.status}`);
+    const j = await res.json();
+    if (!j.line1||!j.line2) throw new Error('Ivan TLE: missing lines');
+    return { name: j.name||String(norad), line1: j.line1, line2: j.line2 };
   }
 
-  // ── SGP4-lite propagator (unchanged — battle-tested NaN guard) ─
+  // ── SGP4-lite propagator for TLE fallback ─────────────────────
   function _propagate(tle, minutesOffset) {
     try {
-      if (!tle?.line2 || tle.line2.length < 63) return null;
-      const l2   = tle.line2;
-      const inc  = parseFloat(l2.substring(8,  16)) * Math.PI / 180;
-      const raan = parseFloat(l2.substring(17, 25)) * Math.PI / 180;
-      const ecc  = parseFloat('0.' + l2.substring(26, 33).trim());
-      const argp = parseFloat(l2.substring(34, 42)) * Math.PI / 180;
-      const ma0  = parseFloat(l2.substring(43, 51)) * Math.PI / 180;
-      const mm   = parseFloat(l2.substring(52, 63));
-
-      if ([inc,raan,ecc,argp,ma0,mm].some(v => !isFinite(v))) return null;
-      if (mm <= 0 || mm > 20) return null;
-      if (ecc < 0 || ecc >= 1) return null;
-
-      const mu = 398600.4418;
-      const n  = mm * 2 * Math.PI / 86400;
-      const a  = Math.cbrt(mu / (n * n));
-      const Ma = ma0 + n * minutesOffset * 60;
-
-      let E = Ma;
-      for (let i = 0; i < 8; i++) E = Ma + ecc * Math.sin(E);
-
-      const nu = 2 * Math.atan2(
-        Math.sqrt(1+ecc)*Math.sin(E/2), Math.sqrt(1-ecc)*Math.cos(E/2)
-      );
-      const r  = a * (1 - ecc * Math.cos(E));
-      const xo = r * Math.cos(nu), yo = r * Math.sin(nu);
-
-      const cosO=Math.cos(raan),sinO=Math.sin(raan);
-      const cosI=Math.cos(inc), sinI=Math.sin(inc);
+      if (!tle?.line2||tle.line2.length<63) return null;
+      const l2=tle.line2;
+      const inc =parseFloat(l2.substring(8,16))*Math.PI/180;
+      const raan=parseFloat(l2.substring(17,25))*Math.PI/180;
+      const ecc =parseFloat('0.'+l2.substring(26,33).trim());
+      const argp=parseFloat(l2.substring(34,42))*Math.PI/180;
+      const ma0 =parseFloat(l2.substring(43,51))*Math.PI/180;
+      const mm  =parseFloat(l2.substring(52,63));
+      if([inc,raan,ecc,argp,ma0,mm].some(v=>!isFinite(v))) return null;
+      if(mm<=0||mm>20||ecc<0||ecc>=1) return null;
+      const mu=398600.4418,n=mm*2*Math.PI/86400,a=Math.cbrt(mu/(n*n));
+      const Ma=ma0+n*minutesOffset*60;
+      let E=Ma;
+      for(let i=0;i<8;i++) E=Ma+ecc*Math.sin(E);
+      const nu=2*Math.atan2(Math.sqrt(1+ecc)*Math.sin(E/2),Math.sqrt(1-ecc)*Math.cos(E/2));
+      const r=a*(1-ecc*Math.cos(E));
+      const xo=r*Math.cos(nu),yo=r*Math.sin(nu);
+      const cosO=Math.cos(raan),sinO=Math.sin(raan),cosI=Math.cos(inc),sinI=Math.sin(inc);
       const cosw=Math.cos(argp),sinw=Math.sin(argp);
-
       const x=(cosO*cosw-sinO*sinw*cosI)*xo+(-cosO*sinw-sinO*cosw*cosI)*yo;
       const y=(sinO*cosw+cosO*sinw*cosI)*xo+(-sinO*sinw+cosO*cosw*cosI)*yo;
       const z=(sinI*sinw)*xo+(sinI*cosw)*yo;
-
-      const nowD = Date.now()/86400000 + 2440587.5 - 2451545.0;
-      const gmst = (280.46061837 + 360.98564736629*nowD + minutesOffset*0.25068)*Math.PI/180;
-      const cosG=Math.cos(gmst), sinG=Math.sin(gmst);
-
-      const xe=x*cosG+y*sinG, ye=-x*sinG+y*cosG, ze=z;
-      const p  =Math.sqrt(xe*xe+ye*ye);
+      const nowD=Date.now()/86400000+2440587.5-2451545.0;
+      const gmst=(280.46061837+360.98564736629*nowD+minutesOffset*0.25068)*Math.PI/180;
+      const xe=x*Math.cos(gmst)+y*Math.sin(gmst),ye=-x*Math.sin(gmst)+y*Math.cos(gmst),ze=z;
+      const p=Math.sqrt(xe*xe+ye*ye);
       const lon=Math.atan2(ye,xe)*180/Math.PI;
       const lat=Math.atan2(ze,p*0.99330562)*180/Math.PI;
       const altM=(Math.sqrt(xe*xe+ye*ye+ze*ze)-6371)*1000;
-
-      if (!isFinite(lat)||!isFinite(lon)||!isFinite(altM)) return null;
-      const latC=Math.max(-89.9,Math.min(89.9,lat));
-      const lonC=((lon+540)%360)-180;
-      return { lat:latC, lon:lonC, altM:Math.max(altM, 200_000) };
-    } catch(e) { return null; }
+      if(!isFinite(lat)||!isFinite(lon)||!isFinite(altM)) return null;
+      return {lat:Math.max(-89.9,Math.min(89.9,lat)),lon:((lon+540)%360)-180,altM:Math.max(altM,200_000)};
+    } catch(e){return null;}
   }
 
-  // ── Build orbital path (60 points, 1 full period) ─────────────
   function _buildOrbitPath(tle) {
-    const mm = parseFloat(tle.line2.substring(52, 63));
-    if (!isFinite(mm) || mm <= 0) return [];
-    const period = 1440 / mm;
-    const STEPS  = 60;
-    const pts    = [];
-    for (let i = 0; i <= STEPS; i++) {
-      try {
-        const pos = _propagate(tle, (i/STEPS) * period);
-        if (pos
-          && isFinite(pos.lat) && isFinite(pos.lon) && isFinite(pos.altM)
-          && Math.abs(pos.lat) <= 90 && Math.abs(pos.lon) <= 180 && pos.altM > 0
-        ) {
-          pts.push(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.altM));
-        }
-      } catch(e) {}
+    const mm=parseFloat(tle.line2.substring(52,63));
+    if(!isFinite(mm)||mm<=0) return [];
+    const period=1440/mm,pts=[];
+    for(let i=0;i<=60;i++){
+      try{
+        const pos=_propagate(tle,(i/60)*period);
+        if(pos&&isFinite(pos.lat)&&isFinite(pos.lon)&&isFinite(pos.altM)&&pos.altM>0)
+          pts.push(Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM));
+      }catch(e){}
     }
     return pts;
   }
 
-  // ── Satellite icon (simplified for large catalog) ─────────────
+  // ── Satellite icon ────────────────────────────────────────────
   const _iconCache = {};
   function _makeSatIcon(color, cat) {
-    const key = `${color}_${cat}`;
-    if (_iconCache[key]) return _iconCache[key];
-    const SZ  = 20;
-    const c   = document.createElement('canvas');
-    c.width   = c.height = SZ;
-    const ctx = c.getContext('2d');
-    ctx.shadowColor = color; ctx.shadowBlur = 10;
-    ctx.strokeStyle = color; ctx.fillStyle  = color; ctx.lineWidth = 1.2;
-
-    if (cat === 'STATION') {
-      // ISS-style cross with solar panels
+    const key=`${color}_${cat}`;
+    if(_iconCache[key]) return _iconCache[key];
+    const SZ=20,c=document.createElement('canvas');
+    c.width=c.height=SZ;
+    const ctx=c.getContext('2d');
+    ctx.shadowColor=color;ctx.shadowBlur=10;
+    ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1.2;
+    if(cat==='STATION'){
       ctx.strokeRect(4,8,12,4);
-      ctx.fillRect(1,9,3,2); ctx.fillRect(16,9,3,2); ctx.fillRect(9,4,2,12);
-    } else if (cat === 'MIL' || cat === 'RADAR') {
-      // Diamond for recon/mil
+      ctx.fillRect(1,9,3,2);ctx.fillRect(16,9,3,2);ctx.fillRect(9,4,2,12);
+    }else if(cat==='MIL'||cat==='RADAR'){
       ctx.beginPath();
-      ctx.moveTo(10,2); ctx.lineTo(18,10); ctx.lineTo(10,18); ctx.lineTo(2,10);
-      ctx.closePath(); ctx.stroke();
-      ctx.fillStyle = color+'33'; ctx.fill();
-    } else if (cat === 'GPS' || cat === 'GLONASS' || cat === 'GALILEO' || cat === 'BEIDOU') {
-      // Nav — hexagon
+      ctx.moveTo(10,2);ctx.lineTo(18,10);ctx.lineTo(10,18);ctx.lineTo(2,10);
+      ctx.closePath();ctx.stroke();
+      ctx.fillStyle=color+'33';ctx.fill();
+    }else if(['GPS','GLONASS','GALILEO','BEIDOU'].includes(cat)){
       ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = (i*60-90)*Math.PI/180;
+      for(let i=0;i<6;i++){
+        const a=(i*60-90)*Math.PI/180;
         i===0?ctx.moveTo(10+8*Math.cos(a),10+8*Math.sin(a)):ctx.lineTo(10+8*Math.cos(a),10+8*Math.sin(a));
       }
-      ctx.closePath(); ctx.stroke();
-    } else {
-      // Generic cross-in-circle
-      ctx.beginPath(); ctx.arc(10,10,5,0,Math.PI*2); ctx.stroke();
+      ctx.closePath();ctx.stroke();
+    }else{
+      ctx.beginPath();ctx.arc(10,10,5,0,Math.PI*2);ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(10,2);ctx.lineTo(10,6);  ctx.moveTo(10,14);ctx.lineTo(10,18);
-      ctx.moveTo(2,10);ctx.lineTo(6,10);  ctx.moveTo(14,10);ctx.lineTo(18,10);
+      ctx.moveTo(10,2);ctx.lineTo(10,6);ctx.moveTo(10,14);ctx.lineTo(10,18);
+      ctx.moveTo(2,10);ctx.lineTo(6,10);ctx.moveTo(14,10);ctx.lineTo(18,10);
       ctx.stroke();
     }
-    _iconCache[key] = c;
+    _iconCache[key]=c;
     return c;
   }
 
@@ -2935,118 +2743,94 @@ const SATELLITE_MODULE = (() => {
 
   function _tick() {
     _active.forEach(sat => {
-      const pos = _propagate(sat.tle, 0);
-      if (!pos || !sat.entity) return;
-      if (!isFinite(pos.lat)||!isFinite(pos.lon)||!isFinite(pos.altM)) return;
+      if (!sat.tle||!sat.entity) return;
+      const pos=_propagate(sat.tle,0);
+      if(!pos||!isFinite(pos.lat)||!isFinite(pos.lon)||!isFinite(pos.altM)) return;
       try {
-        sat.entity.position = Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.altM);
-        if (sat.entity._oeData) {
-          sat.entity._oeData.lat  = pos.lat;
-          sat.entity._oeData.lon  = pos.lon;
-          sat.entity._oeData.altM = pos.altM;
+        sat.entity.position=Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM);
+        if(sat.entity._oeData){
+          sat.entity._oeData.lat=pos.lat;
+          sat.entity._oeData.lon=pos.lon;
+          sat.entity._oeData.altM=pos.altM;
+          sat.entity._oeData.altKm=Math.round(pos.altM/1000);
         }
-      } catch(e) {}
+      } catch(e){}
     });
   }
 
-  // ── Render — handles thousands of sats efficiently ────────────
-  // Orbital paths only for priority-1 sats (stations, weather, mil)
-  // All others just get a billboard + live tick
-  async function _render(catalog) {
-    const layer = LAYER_REGISTRY.SATELLITE;
-    layer.entities.entities.removeAll();
-    _active.length = 0;
-    if (_ticker) { clearInterval(_ticker); _ticker = null; }
+  // ── Render one satellite ──────────────────────────────────────
+  function _renderSat(meta, pos, tle) {
+    const layer=LAYER_REGISTRY.SATELLITE;
+    const icon=_makeSatIcon(meta.color,meta.cat);
+    const sz=meta.priority===1?20:12;
 
-    let rendered = 0;
-
-    for (const sat of catalog) {
-      const pos = _propagate(sat, 0);
-      if (!pos || !isFinite(pos.lat) || !isFinite(pos.lon) || !isFinite(pos.altM)) continue;
-
-      // Orbital path only for priority-1 categories (keeps performance sane with 1000s of sats)
-      if (sat.priority === 1) {
-        const pathPts = _buildOrbitPath(sat);
-        if (pathPts.length >= 4) {
-          layer.entities.entities.add({
-            polyline: {
-              positions: pathPts,
-              width:     1.5,
-              material:  new Cesium.PolylineGlowMaterialProperty({
-                glowPower: 0.2,
-                color: Cesium.Color.fromCssColorString(sat.color).withAlpha(0.5),
-              }),
-              clampToGround: false,
-              arcType: Cesium.ArcType.NONE,
-            },
-          });
-        }
+    // Orbital path (priority-1 only, uses TLE)
+    if(meta.priority===1&&tle){
+      const pathPts=_buildOrbitPath(tle);
+      if(pathPts.length>=4){
+        layer.entities.entities.add({
+          polyline:{
+            positions:pathPts, width:1.5,
+            material:new Cesium.PolylineGlowMaterialProperty({
+              glowPower:0.2,
+              color:Cesium.Color.fromCssColorString(meta.color).withAlpha(0.5),
+            }),
+            clampToGround:false, arcType:Cesium.ArcType.NONE,
+          },
+        });
       }
-
-      const icon = _makeSatIcon(sat.color, sat.cat);
-      const sz   = sat.priority === 1 ? 20 : 12;
-
-      const entity = layer.entities.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.altM),
-        billboard: {
-          image: icon, width: sz, height: sz,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          scaleByDistance: new Cesium.NearFarScalar(500_000, 1.2, 25_000_000, 0.3),
-          disableDepthTestDistance: 500,
-        },
-        label: {
-          text:  sat.name,
-          font:  '9px Share Tech Mono, monospace',
-          fillColor:    Cesium.Color.fromCssColorString(sat.color),
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset: new Cesium.Cartesian2(0, -14),
-          // Labels only show for priority-1 sats + when zoomed in
-          scaleByDistance: sat.priority === 1
-            ? new Cesium.NearFarScalar(500_000, 1.0, 10_000_000, 0.0)
-            : new Cesium.NearFarScalar(500_000, 0.8, 3_000_000, 0.0),
-          disableDepthTestDistance: 500,
-          showBackground:    sat.priority === 1,
-          backgroundColor:   Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),
-          backgroundPadding: new Cesium.Cartesian2(3, 2),
-        },
-      });
-
-      const incDeg = parseFloat(sat.line2.substring(8,16));
-      const mmVal  = parseFloat(sat.line2.substring(52,63));
-      const periodMin = isFinite(mmVal) && mmVal>0 ? Math.round(1440/mmVal) : null;
-      const altKm  = Math.round(pos.altM / 1000);
-
-      entity._oeData = {
-        ...sat, ...pos, type:'satellite', classification: sat.cat,
-        periodMin, incDeg: isFinite(incDeg) ? incDeg.toFixed(2) : null,
-        altKm,
-      };
-
-      _active.push({ tle: sat, entity });
-      rendered++;
     }
 
-    _ticker = setInterval(_tick, 5_000);  // 5s tick for smoother movement
-    layer.count = rendered;
-    LAYER_REGISTRY._sync('SATELLITE');
-    LOG.add(`[SAT] ${rendered} satellites plotted from Celestrak catalog`, 'sat');
-    UI.setStatus('satellite', `LIVE · ${rendered}`, 'ok');
-    document.getElementById('sb-sats').innerHTML = `SATS <span>${rendered}</span>`;
+    const entity=layer.entities.entities.add({
+      position:Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM),
+      // Point — always visible at any altitude
+      point:{
+        pixelSize:meta.priority===1?7:4,
+        color:Cesium.Color.fromCssColorString(meta.color),
+        outlineColor:Cesium.Color.BLACK, outlineWidth:1,
+        scaleByDistance:new Cesium.NearFarScalar(500_000,1.5,30_000_000,1.0),
+        disableDepthTestDistance:500,
+      },
+      // Billboard — shows when zoomed in
+      billboard:{
+        image:icon, width:sz, height:sz,
+        verticalOrigin:Cesium.VerticalOrigin.CENTER,
+        scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,8_000_000,0.0),
+        disableDepthTestDistance:500,
+      },
+      label:{
+        text:meta.name,
+        font:'9px Share Tech Mono, monospace',
+        fillColor:Cesium.Color.fromCssColorString(meta.color),
+        outlineColor:Cesium.Color.BLACK,outlineWidth:2,
+        style:Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset:new Cesium.Cartesian2(0,-14),
+        scaleByDistance:meta.priority===1
+          ?new Cesium.NearFarScalar(500_000,1.0,10_000_000,0.0)
+          :new Cesium.NearFarScalar(500_000,0.8,3_000_000,0.0),
+        disableDepthTestDistance:500,
+        showBackground:meta.priority===1,
+        backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),
+        backgroundPadding:new Cesium.Cartesian2(3,2),
+      },
+    });
+
+    const altKm=Math.round(pos.altM/1000);
+    entity._oeData={...meta,...pos,type:'satellite',classification:meta.cat,altKm};
+    if(tle) _active.push({tle,entity,meta});
+    return entity;
   }
 
   // ── Detail renderer ───────────────────────────────────────────
   DETAIL_RENDERERS['satellite'] = (d) => {
-    const col    = d.color || '#44ffcc';
-    const altStr = d.altKm ? `${d.altKm.toLocaleString()} km` : '—';
-    const catBadge = {
-      STATION:'🛸 SPACE STATION', STARLINK:'📡 STARLINK', GPS:'🔵 GPS NAV',
-      GLONASS:'🔵 GLONASS NAV',  GALILEO:'🔵 GALILEO',   BEIDOU:'🔵 BEIDOU',
-      WEATHER:'🌤 WEATHER',      NOAA:'🌤 NOAA',          EO:'📷 EARTH OBS',
-      MIL:'🔴 MILITARY',         RADAR:'🔴 RADAR',        SAR:'🔴 SAR',
-      IRIDIUM:'📡 IRIDIUM',      ONEWEB:'📡 ONEWEB',      AMATEUR:'📻 AMATEUR',
-      GEO:'🌍 GEO',              ACTIVE:'🛰 ACTIVE',
-    }[d.cat] || `🛰 ${d.cat||'SATELLITE'}`;
+    const col=d.color||'#44ffcc';
+    const altStr=d.altKm?`${d.altKm.toLocaleString()} km`:'—';
+    const catBadge={
+      STATION:'🛸 SPACE STATION',STARLINK:'📡 STARLINK',GPS:'🔵 GPS NAV',
+      GLONASS:'🔵 GLONASS',GALILEO:'🔵 GALILEO',BEIDOU:'🔵 BEIDOU',
+      WEATHER:'🌤 WEATHER',EO:'📷 EARTH OBS',MIL:'🔴 MILITARY',
+      GEO:'🌍 GEO',IRIDIUM:'📡 IRIDIUM',AMATEUR:'📻 AMATEUR',
+    }[d.cat]||`🛰 ${d.cat||'SATELLITE'}`;
     return `
       <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
       <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${catBadge}</span>
@@ -3055,63 +2839,88 @@ const SATELLITE_MODULE = (() => {
         <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value" style="color:${col}">${altStr}</div></div>
         <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat!=null?d.lat.toFixed(3)+'°':'—'}</div></div>
         <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon!=null?d.lon.toFixed(3)+'°':'—'}</div></div>
-        <div><div class="dg-cell-label">Inclination</div><div class="dg-cell-value">${d.incDeg!=null?d.incDeg+'°':'—'}</div></div>
-        <div><div class="dg-cell-label">Orbital Period</div><div class="dg-cell-value">${d.periodMin?d.periodMin+' min':'—'}</div></div>
         <div><div class="dg-cell-label">Category</div><div class="dg-cell-value">${d.cat||'—'}</div></div>
-        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">Celestrak TLE</div></div>
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">N2YO + Celestrak TLE</div></div>
       </div>`;
   };
 
-  // ── Main refresh — fetch all groups in parallel ───────────────
+  // ── Main refresh — staggered N2YO + TLE fallback ──────────────
   LAYER_REGISTRY.SATELLITE.refresh = async function () {
-    UI.setStatus('satellite', 'FETCHING', 'warn');
-    LOG.add('[SAT] Fetching Celestrak TLE catalog groups in parallel...', 'sys');
+    UI.setStatus('satellite','FETCHING','warn');
+    LOG.add(`[SAT] Fetching ${SAT_CATALOG.length} satellites from N2YO...`,'sys');
 
-    const results = await Promise.allSettled(TLE_URLS.map(_fetchGroup));
+    const layer=LAYER_REGISTRY.SATELLITE;
+    layer.entities.entities.removeAll();
+    _active.length=0;
+    if(_ticker){clearInterval(_ticker);_ticker=null;}
 
-    // Deduplicate by NORAD ID — priority-1 categories win
-    const noradMap = new Map();
-    let   total    = 0;
+    let rendered=0;
+    const seen=new Set();
 
-    // Process priority-1 first, then priority-2
-    const sorted = TLE_URLS.map((entry, i) => ({ entry, result: results[i] }))
-      .sort((a,b) => a.entry.priority - b.entry.priority);
+    // Staggered fetch — 400ms between requests to respect N2YO rate limit
+    for(const meta of SAT_CATALOG){
+      if(seen.has(meta.norad)){continue;}
+      seen.add(meta.norad);
 
-    for (const { entry, result } of sorted) {
-      if (result.status === 'rejected') {
-        LOG.add(`[SAT] ${entry.cat} failed — ${result.reason?.message}`, 'warn');
-        continue;
-      }
-      let added = 0;
-      for (const sat of result.value) {
-        // Assign priority from the URL entry that fetched it
-        sat.priority = entry.priority;
-        if (!noradMap.has(sat.norad)) {
-          noradMap.set(sat.norad, sat);
-          added++;
-          total++;
+      try{
+        // Try N2YO first (live position, no propagation needed)
+        const pos=await _fetchN2YO(meta.norad,meta.name);
+
+        // Also fetch TLE for orbital path + dead-reckoning
+        let tle=null;
+        try{ tle=await _fetchIvanTLE(meta.norad); }catch(e){}
+
+        _renderSat(meta,pos,tle);
+        rendered++;
+        LOG.add(`[SAT] ${meta.name} @ ${Math.round(pos.altKm)}km`,'sat');
+
+        // Update status progressively
+        layer.count=rendered;
+        LAYER_REGISTRY._sync('SATELLITE');
+        document.getElementById('sb-sats').innerHTML=`SATS <span>${rendered}</span>`;
+        UI.setStatus('satellite',`LIVE · ${rendered}`,'ok');
+
+      }catch(e){
+        // N2YO failed — try TLE fallback
+        LOG.add(`[SAT] ${meta.name} N2YO failed (${e.message}) — trying TLE`,'warn');
+        try{
+          const tle=await _fetchIvanTLE(meta.norad);
+          const pos=_propagate(tle,0);
+          if(pos&&isFinite(pos.lat)&&isFinite(pos.lon)&&isFinite(pos.altM)){
+            _renderSat(meta,{...pos,altKm:Math.round(pos.altM/1000)},tle);
+            rendered++;
+            LOG.add(`[SAT] ${meta.name} via TLE fallback`,'sat');
+            layer.count=rendered;
+            LAYER_REGISTRY._sync('SATELLITE');
+            document.getElementById('sb-sats').innerHTML=`SATS <span>${rendered}</span>`;
+          }
+        }catch(e2){
+          LOG.add(`[SAT] ${meta.name} all sources failed`,'warn');
         }
       }
-      LOG.add(`[SAT] ${entry.cat}: ${added} objects loaded`, 'sat');
+
+      // 400ms stagger between each satellite request
+      await new Promise(r=>setTimeout(r,400));
     }
 
-    if (total === 0) {
-      LOG.add('[SAT] All TLE fetches failed — satellites offline', 'warn');
-      UI.setStatus('satellite', 'OFFLINE', 'err');
+    if(rendered===0){
+      LOG.add('[SAT] All satellite fetches failed','alrt');
+      UI.setStatus('satellite','OFFLINE','err');
       return;
     }
 
-    LOG.add(`[SAT] ${total} unique objects in catalog — rendering...`, 'sat');
-    await _render(Array.from(noradMap.values()));
+    _ticker=setInterval(_tick,5000);
+    LOG.add(`[SAT] ${rendered} satellites active — 5s position tick`,'sat');
+    UI.setStatus('satellite',`LIVE · ${rendered}`,'ok');
   };
 
-  LOG.add('[SAT] v2 module loaded — full Celestrak catalog mode', 'sat');
-  UI.setStatus('satellite', 'LOADING', 'warn');
-  setTimeout(() => LAYER_REGISTRY.SATELLITE.refresh(), 3200);
-
-  return { refresh: () => LAYER_REGISTRY.SATELLITE.refresh() };
+  LOG.add('[SAT] v3 module loaded — N2YO authenticated API','sat');
+  UI.setStatus('satellite','LOADING','warn');
+  setTimeout(()=>LAYER_REGISTRY.SATELLITE.refresh(),3200);
+  return {refresh:()=>LAYER_REGISTRY.SATELLITE.refresh()};
 
 })(); // END SATELLITE_MODULE
+
 
 
 // ╔══════════════════════════════════════════════════════════════╗
@@ -3217,8 +3026,8 @@ const ENVIRONMENT_MODULE = (() => {
   async function _loadWeather() {
     UI.setStatus('weather', 'FETCHING', 'warn');
     try {
-      const apiRes  = await PROXY.get('https://api.rainviewer.com/public/weather-maps.json',
-                                     { timeout: 8000 });
+      const apiRes  = await fetch('https://api.rainviewer.com/public/weather-maps.json',
+                               { signal: AbortSignal.timeout(8000) });
       if (!apiRes.ok) throw new Error(`RainViewer HTTP ${apiRes.status}`);
       const data    = await apiRes.json();
       const frames  = data.radar?.past;

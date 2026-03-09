@@ -1809,14 +1809,14 @@ const NAV_CONTROLLER = (() => {
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  AVIATION_MODULE  —  v7  VERCEL → AIRLABS                   ║
-// ║  Browser → Vercel proxy → AirLabs v9 flights API            ║
-// ║  Real global flights, richer data (route, aircraft type)    ║
+// ║  AVIATION_MODULE  —  v8  POINTS + AIRLABS                   ║
+// ║  PointPrimitiveCollection — GPU-direct, handles 10k+        ║
+// ║  Full entity only on click (LOD pattern)                    ║
 // ╚══════════════════════════════════════════════════════════════╝
 const AVIATION_MODULE = (() => {
 
   const PROXY_URL = 'https://open-eye-iota.vercel.app/api/adsb';
-  const POLL_MS   = 60000;  // 60s — conserves AirLabs 1000/month quota (~720/month)
+  const POLL_MS   = 60000;
 
   // ── Military classification ───────────────────────────────────
   const MIL_PREFIXES = [
@@ -1831,128 +1831,133 @@ const AVIATION_MODULE = (() => {
     'RTAF','ROKAF','JASDF','PLAAF','PLANAF',
   ];
   const MIL_HEX = [
-    'ae','af','a9f','c0','c1','c2','43c','43d','43e','43f',
+    'ae0','ae1','ae2','ae3','ae4','ae5','ae6','af',
+    'a9f','c0','c1','c2','43c','43d','43e','43f',
     '800','801','76','77','f00','f01','f02',
-    '710','711','712','713','460','461','462','463','464',
-    '3a0','3a1','3a2','3a3','3a4','3000','3001',
+    '710','711','712','713',
+    '3a0','3a1','3a2','3a3','3a4',
   ];
 
   function _classify(f) {
     const cs  = (f.callsign || '').trim().toUpperCase();
     const hex = (f.icao24   || '').toLowerCase();
-    // Only flag as military if callsign is completely absent
     if (!cs) return 'MILITARY';
-    // Must be ONLY hex digits (pure ICAO hex, no letters from airline codes)
-    // Real airline ICAO codes are 3 letters + digits e.g. UAL901, AIC2335
-    // Pure hex squawks look like: AE1234, AF0408 (starts with known mil hex prefix)
-    if (MIL_HEX.some(p => hex.startsWith(p))) return 'MILITARY';
-    // Callsign starts with known military prefix
+    if (MIL_HEX.some(p => hex.startsWith(p)))     return 'MILITARY';
     if (MIL_PREFIXES.some(p => cs.startsWith(p))) return 'MILITARY';
     return 'COMMERCIAL';
   }
 
-  // ── Aircraft icon canvas — crisp top-down silhouette ─────────
-  const _iconCache = {};
-  function _makeIcon(type, heading) {
-    const SZ = 48, c = document.createElement('canvas');
-    c.width = c.height = SZ;
-    const ctx  = c.getContext('2d');
-    const col  = type === 'MILITARY' ? '#ff9900' : '#00ff9d';
-    const glow = type === 'MILITARY' ? '#ff6600aa' : '#00ff9d88';
-    ctx.save();
-    ctx.translate(SZ/2, SZ/2);
-    ctx.rotate((heading || 0) * Math.PI / 180);
-
-    // Glow shadow
-    ctx.shadowColor = glow;
-    ctx.shadowBlur  = 8;
-    ctx.fillStyle   = col;
-    ctx.strokeStyle = col;
-
-    if (type === 'MILITARY') {
-      // Delta-wing fighter silhouette
-      ctx.lineWidth = 1;
-      // Fuselage
-      ctx.beginPath();
-      ctx.moveTo(0, -16); ctx.lineTo(2.5, -4); ctx.lineTo(2.5, 8);
-      ctx.lineTo(0, 11);  ctx.lineTo(-2.5, 8); ctx.lineTo(-2.5, -4);
-      ctx.closePath(); ctx.fill();
-      // Delta wings
-      ctx.beginPath();
-      ctx.moveTo(0, -4); ctx.lineTo(-16, 8); ctx.lineTo(-4, 8);
-      ctx.closePath(); ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(0, -4); ctx.lineTo(16, 8); ctx.lineTo(4, 8);
-      ctx.closePath(); ctx.fill();
-      // Tail fins
-      ctx.beginPath();
-      ctx.moveTo(-2, 6); ctx.lineTo(-7, 12); ctx.lineTo(-2, 10);
-      ctx.closePath(); ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(2, 6); ctx.lineTo(7, 12); ctx.lineTo(2, 10);
-      ctx.closePath(); ctx.fill();
-    } else {
-      // Commercial airliner top-down silhouette
-      ctx.lineWidth = 0.5;
-      // Fuselage — tapered tube
-      ctx.beginPath();
-      ctx.moveTo(0, -17);           // nose
-      ctx.bezierCurveTo(2.5,-14, 3,-8, 3, 2);
-      ctx.lineTo(2, 9);
-      ctx.lineTo(0, 11);            // tail
-      ctx.lineTo(-2, 9);
-      ctx.lineTo(-3, 2);
-      ctx.bezierCurveTo(-3,-8, -2.5,-14, 0,-17);
-      ctx.closePath(); ctx.fill();
-      // Main wings — swept back
-      ctx.beginPath();
-      ctx.moveTo(-2.5, -4);
-      ctx.lineTo(-18, 6);
-      ctx.lineTo(-17, 8);
-      ctx.lineTo(-3, 3);
-      ctx.closePath(); ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(2.5, -4);
-      ctx.lineTo(18, 6);
-      ctx.lineTo(17, 8);
-      ctx.lineTo(3, 3);
-      ctx.closePath(); ctx.fill();
-      // Horizontal stabilisers (tail)
-      ctx.beginPath();
-      ctx.moveTo(-1.5, 7);
-      ctx.lineTo(-8, 11);
-      ctx.lineTo(-7, 12);
-      ctx.lineTo(-1.5, 9);
-      ctx.closePath(); ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(1.5, 7);
-      ctx.lineTo(8, 11);
-      ctx.lineTo(7, 12);
-      ctx.lineTo(1.5, 9);
-      ctx.closePath(); ctx.fill();
-    }
-    ctx.restore();
-    return c;
-  }
-  function _getIcon(type, heading) {
-    const b = Math.round((heading || 0) / 10) * 10;
-    const k = `${type}_${b}`;
-    if (!_iconCache[k]) _iconCache[k] = _makeIcon(type, b);
-    return _iconCache[k];
-  }
-
   // ── State ─────────────────────────────────────────────────────
-  const _drState   = new Map();
-  let   _pollTimer = null;
-  let   _drTimer   = null;
-  let   _lastCount = 0;
+  let   _pointCollection = null;   // GPU point primitives
+  let   _labelCollection = null;   // GPU label primitives
+  const _flightData      = new Map(); // icao24 → full flight object
+  const _pointIndex      = new Map(); // icao24 → index in point collection
+  const _drState         = new Map(); // icao24 → dead-reckoning state
+  let   _selectedEntity  = null;   // full entity for clicked flight
+  let   _pollTimer       = null;
+  let   _drTimer         = null;
+  let   _lastCount       = 0;
 
-  // ── Dead-reckoning ────────────────────────────────────────────
+  // ── Initialise GPU collections ────────────────────────────────
+  function _initCollections() {
+    const layer = LAYER_REGISTRY.AVIATION;
+    // Clear any old entities
+    layer.entities.entities.removeAll();
+
+    if (_pointCollection) { try { viewer.scene.primitives.remove(_pointCollection); } catch(e){} }
+    if (_labelCollection) { try { viewer.scene.primitives.remove(_labelCollection); } catch(e){} }
+
+    _pointCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    _labelCollection = viewer.scene.primitives.add(new Cesium.LabelCollection());
+    _pointIndex.clear();
+    _flightData.clear();
+  }
+
+  // ── Render all flights as GPU points ─────────────────────────
+  function _render(flights) {
+    _initCollections();
+    _drState.clear();
+
+    let milCount   = 0;
+    const feedItems = [];
+
+    flights.forEach(f => {
+      if (!isFinite(f.lat) || !isFinite(f.lon)) return;
+      if (f.lat < -90 || f.lat > 90 || f.lon < -180 || f.lon > 180) return;
+
+      const cls   = _classify(f);
+      f.classification = cls;
+      const altM  = Math.max(f.altitude || 300, 300);
+      const altFt = altM * 3.28084;
+      f.flStr     = `FL${Math.round(altFt / 100).toString().padStart(3,'0')}`;
+      const col   = cls === 'MILITARY'
+        ? new Cesium.Color(1.0, 0.6, 0.0, 1.0)   // orange
+        : new Cesium.Color(0.0, 1.0, 0.62, 1.0);  // green
+
+      if (cls === 'MILITARY') {
+        milCount++;
+        LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country}`, 'warn');
+      }
+
+      // Add a single GPU point — extremely fast
+      const pt = _pointCollection.add({
+        position:  Cesium.Cartesian3.fromDegrees(f.lon, f.lat, altM),
+        color:     col,
+        pixelSize: cls === 'MILITARY' ? 7 : 5,
+        outlineColor: cls === 'MILITARY'
+          ? new Cesium.Color(1.0, 0.4, 0.0, 0.6)
+          : new Cesium.Color(0.0, 0.8, 0.5, 0.4),
+        outlineWidth: 2,
+        scaleByDistance: new Cesium.NearFarScalar(500_000, 1.5, 10_000_000, 0.4),
+        translucencyByDistance: new Cesium.NearFarScalar(200_000, 1.0, 15_000_000, 0.3),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        id: f.icao24,
+      });
+
+      // Store index so dead-reckoning can update position
+      const idx = _pointCollection.length - 1;
+      _pointIndex.set((f.icao24||'').toLowerCase(), idx);
+      _flightData.set((f.icao24||'').toLowerCase(), { ...f, altM });
+
+      _drState.set((f.icao24||'').toLowerCase(), {
+        lat: f.lat, lon: f.lon, alt: altM,
+        heading: f.heading || 0, velocity: f.velocity || 0,
+        lastTick: Date.now(),
+        ptIdx: idx,
+      });
+
+      feedItems.push({
+        type: 'flight',
+        name: f.callsign || (f.icao24||'').toUpperCase(),
+        sub:  `${f.country} · ${f.flStr} · ${f.velocity?f.velocity+'km/h':'?'}`,
+        color: cls === 'MILITARY' ? '#ff9900' : '#00ff9d',
+        tag:      cls==='MILITARY' ? 'tag-mil' : 'tag-air',
+        tagLabel: cls==='MILITARY' ? 'MIL'     : 'CIV',
+        lat: f.lat, lon: f.lon,
+        feedAlt: Math.max(altM * 1.5, 150_000),
+      });
+    });
+
+    _startDR();
+
+    const layer    = LAYER_REGISTRY.AVIATION;
+    layer.count    = flights.length;
+    LAYER_REGISTRY._sync('AVIATION');
+    UI.renderFeed(feedItems);
+    LOG.add(`[AVIATION] ${flights.length} contacts · ${milCount} military · AirLabs`, 'sig');
+    UI.setStatus('aviation', `LIVE · ${flights.length}`, 'ok');
+    document.getElementById('sb-flights').innerHTML = `FLIGHTS <span>${flights.length}</span>`;
+    document.getElementById('sb-demo').style.display = 'none';
+    _lastCount = flights.length;
+  }
+
+  // ── Dead-reckoning — update GPU point positions ───────────────
   function _startDR() {
     if (_drTimer) clearInterval(_drTimer);
     _drTimer = setInterval(() => {
+      if (!_pointCollection || _pointCollection.isDestroyed()) return;
       const now = Date.now();
-      _drState.forEach((dr, key) => {
+      _drState.forEach((dr) => {
         if (!dr.velocity || dr.velocity < 50) return;
         const dt     = (now - dr.lastTick) / 1000;
         dr.lastTick  = now;
@@ -1965,134 +1970,46 @@ const AVIATION_MODULE = (() => {
         dr.lon += (distM / R) * (180 / Math.PI) / Math.cos(latRad) * Math.sin(hdgRad);
         dr.lat  = Math.max(-89, Math.min(89, dr.lat));
         dr.lon  = ((dr.lon + 540) % 360) - 180;
-        const entity = LAYER_REGISTRY.AVIATION.entities.entities.getById(key);
-        if (entity && isFinite(dr.lat) && isFinite(dr.lon)) {
-          try {
-            entity.position = Cesium.Cartesian3.fromDegrees(dr.lon, dr.lat, dr.alt);
-            if (entity._oeData) { entity._oeData.lat=dr.lat; entity._oeData.lon=dr.lon; }
-          } catch(e) {}
-        }
+
+        try {
+          const pt = _pointCollection.get(dr.ptIdx);
+          if (pt) pt.position = Cesium.Cartesian3.fromDegrees(dr.lon, dr.lat, dr.alt);
+        } catch(e) {}
       });
     }, 1000);
   }
 
-  // ── Render ────────────────────────────────────────────────────
-  function _render(flights) {
-    const layer = LAYER_REGISTRY.AVIATION;
-    layer.entities.entities.removeAll();
-    _drState.clear();
+  // ── Click handler — show full entity detail for selected ──────
+  // Hooked into the existing viewer pick handler via LAYER_REGISTRY
+  LAYER_REGISTRY.AVIATION._onPick = function(pickedId) {
+    // pickedId is the icao24 string set as point id
+    const key  = (pickedId || '').toLowerCase();
+    const data = _flightData.get(key);
+    if (!data) return false;
 
-    let milCount  = 0;
-    const feedItems = [];
+    // Remove previous selected entity
+    if (_selectedEntity) {
+      try { LAYER_REGISTRY.AVIATION.entities.entities.remove(_selectedEntity); } catch(e){}
+      _selectedEntity = null;
+    }
 
-    flights.forEach(f => {
-      if (!isFinite(f.lat) || !isFinite(f.lon)) return;
-      if (f.lat < -90 || f.lat > 90 || f.lon < -180 || f.lon > 180) return;
+    const col  = data.classification==='MILITARY' ? '#ff9900' : '#00ff9d';
+    const dr   = _drState.get(key);
+    const lat  = dr ? dr.lat : data.lat;
+    const lon  = dr ? dr.lon : data.lon;
+    const altM = data.altM || 300;
 
-      const cls = _classify(f);
-      f.classification = cls;
-      if (cls === 'MILITARY') {
-        milCount++;
-        LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country}`, 'warn');
+    // Show detail panel
+    if (typeof DETAIL_RENDERERS !== 'undefined' && DETAIL_RENDERERS['flight']) {
+      const html = DETAIL_RENDERERS['flight'](data);
+      const panel = document.getElementById('detail-panel');
+      if (panel) {
+        panel.innerHTML = html;
+        panel.style.display = 'block';
       }
-
-      const altM  = Math.max(f.altitude || 300, 300);
-      const altFt = altM * 3.28084;
-      const flStr = `FL${Math.round(altFt / 100).toString().padStart(3,'0')}`;
-      const col   = cls === 'MILITARY' ? '#ff9900' : '#00ff9d';
-      const icon  = _getIcon(cls, f.heading);
-
-      const entity = layer.entities.entities.add({
-        id: f.icao24 || undefined,
-        position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, altM),
-        billboard: {
-          image:  icon,
-          width:  cls === 'MILITARY' ? 32 : 28,
-          height: cls === 'MILITARY' ? 32 : 28,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          scaleByDistance:        new Cesium.NearFarScalar(80_000,  1.4, 8_000_000, 0.25),
-          translucencyByDistance: new Cesium.NearFarScalar(100_000, 1.0,12_000_000, 0.4),
-          disableDepthTestDistance: 500,
-        },
-        polyline: {
-          positions: Cesium.Cartesian3.fromDegreesArrayHeights(
-            [f.lon, f.lat, 0, f.lon, f.lat, altM]),
-          width: 1,
-          material: new Cesium.PolylineDashMaterialProperty({
-            color: Cesium.Color.fromCssColorString(col).withAlpha(0.15),
-            dashLength: 12,
-          }),
-          clampToGround: false,
-        },
-        label: {
-          text: f.callsign || (f.icao24 || '').toUpperCase(),
-          font: '11px Share Tech Mono, monospace',
-          fillColor:    Cesium.Color.fromCssColorString(col),
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-          style:        Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset:  new Cesium.Cartesian2(0, -22),
-          scaleByDistance: new Cesium.NearFarScalar(80_000, 1.0, 2_500_000, 0.0),
-          disableDepthTestDistance: 500,
-          showBackground: true,
-          backgroundColor: Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
-          backgroundPadding: new Cesium.Cartesian2(4, 2),
-        },
-      });
-
-      entity._oeData = { ...f, type:'flight', altM, flStr };
-      _drState.set((f.icao24 || '').toLowerCase() || f.callsign, {
-        lat: f.lat, lon: f.lon, alt: altM,
-        heading: f.heading || 0, velocity: f.velocity || 0,
-        lastTick: Date.now(),
-      });
-
-      feedItems.push({
-        type: 'flight',
-        name: f.callsign || (f.icao24||'').toUpperCase(),
-        sub:  `${f.country} · ${flStr} · ${f.velocity?f.velocity+'km/h':'?'}${f.depIata&&f.arrIata?' · '+f.depIata+'→'+f.arrIata:''}`,
-        color: col,
-        tag:      cls==='MILITARY' ? 'tag-mil' : 'tag-air',
-        tagLabel: cls==='MILITARY' ? 'MIL'     : 'CIV',
-        lat: f.lat, lon: f.lon,
-        feedAlt: Math.max(altM * 1.5, 150_000),
-      });
-    });
-
-    const activeHex = new Set(flights.map(f => (f.icao24||'').toLowerCase()));
-    for (const key of _drState.keys()) {
-      if (!activeHex.has(key)) _drState.delete(key);
     }
-
-    _startDR();
-    layer.count = flights.length;
-    LAYER_REGISTRY._sync('AVIATION');
-    UI.renderFeed(feedItems);
-    LOG.add(`[AVIATION] ${flights.length} contacts · ${milCount} military · via AirLabs`, 'sig');
-    UI.setStatus('aviation', `LIVE · ${flights.length}`, 'ok');
-    document.getElementById('sb-flights').innerHTML = `FLIGHTS <span>${flights.length}</span>`;
-    document.getElementById('sb-demo').style.display = 'none';
-    _lastCount = flights.length;
-  }
-
-  // ── Fetch via Vercel proxy ────────────────────────────────────
-  async function _poll() {
-    UI.setStatus('aviation', 'FETCHING', 'warn');
-    try {
-      const res = await fetch(PROXY_URL, {
-        signal: AbortSignal.timeout(25000),
-      });
-      if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      const flights = data.flights || [];
-      if (flights.length === 0) throw new Error('Empty response from AirLabs');
-      _render(flights);
-    } catch(e) {
-      LOG.add(`[AVIATION] Proxy failed: ${e.message}`, 'warn');
-      UI.setStatus('aviation', 'FALLBACK', 'err');
-      if (_lastCount > 0) LOG.add('[AVIATION] Keeping previous data until next poll', 'sys');
-    }
-  }
+    return true;
+  };
 
   // ── Detail panel ──────────────────────────────────────────────
   DETAIL_RENDERERS['flight'] = (d) => {
@@ -2128,10 +2045,27 @@ const AVIATION_MODULE = (() => {
       </div>`;
   };
 
+  // ── Fetch via Vercel proxy ────────────────────────────────────
+  async function _poll() {
+    UI.setStatus('aviation', 'FETCHING', 'warn');
+    try {
+      const res = await fetch(PROXY_URL, { signal: AbortSignal.timeout(25000) });
+      if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      const flights = data.flights || [];
+      if (flights.length === 0) throw new Error('Empty response');
+      _render(flights);
+    } catch(e) {
+      LOG.add(`[AVIATION] Proxy failed: ${e.message}`, 'warn');
+      UI.setStatus('aviation', 'FALLBACK', 'err');
+    }
+  }
+
   // ── Boot ──────────────────────────────────────────────────────
   LAYER_REGISTRY.AVIATION.refresh = async function() { await _poll(); };
 
-  LOG.add('[AVIATION] v7 — Vercel proxy → AirLabs global flights', 'air');
+  LOG.add('[AVIATION] v8 — PointPrimitives + AirLabs · GPU-direct rendering', 'air');
   UI.setStatus('aviation', 'LOADING', 'warn');
   _poll();
   _pollTimer = setInterval(_poll, POLL_MS);

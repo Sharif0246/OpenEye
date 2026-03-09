@@ -927,27 +927,53 @@ async function LOAD_MAP() {
     LOG.add(`[MAP] Label layer unavailable — ${err.message}`, 'warn');
   }
 
-  // Step 2 — Google Photorealistic 3D Tiles
+  // Step 2 — Globe imagery (no quota, no Ion tiles needed)
   try {
-    LOG.add('[SYS] Requesting Google Photorealistic 3D Tiles...', 'sys');
-    const tileset = await Cesium.createGooglePhotorealistic3DTileset();
-    scene.primitives.add(tileset);
-    LOG.add('[MAP] Google 3D Tiles active — photorealistic globe ONLINE', 'sig');
-    UI.setStatus('globe', 'ONLINE', 'ok');
-  } catch (err) {
-    console.warn('Google 3D Tiles failed:', err.message);
-    LOG.add('[WARN] Google 3D Tiles failed — activating Esri Street fallback', 'warn');
-    UI.setStatus('globe', 'FALLBACK', 'warn');
     scene.globe = new Cesium.Globe(scene.ellipsoid);
     scene.globe.enableLighting       = true;
     scene.globe.showGroundAtmosphere = true;
+    scene.globe.baseColor            = Cesium.Color.fromCssColorString('#020408');
+
+    // Primary: Bing Maps Aerial — free, no quota, high-res satellite
+    scene.imageryLayers.removeAll();
     scene.imageryLayers.addImageryProvider(
       new Cesium.UrlTemplateImageryProvider({
-        url:          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+        url: 'https://ecn.t{s}.tiles.virtualearth.net/tiles/a{quadkey}.jpeg?g=1',
+        subdomains: ['0','1','2','3'],
         maximumLevel: 19,
-        credit:       'Esri World Street Map',
+        credit: 'Bing Maps Aerial © Microsoft',
+        customTags: {
+          quadkey: (imageryProvider, x, y, level) => {
+            let quadkey = '';
+            for (let i = level; i > 0; i--) {
+              let digit = 0;
+              const mask = 1 << (i - 1);
+              if ((x & mask) !== 0) digit++;
+              if ((y & mask) !== 0) digit += 2;
+              quadkey += digit;
+            }
+            return quadkey;
+          }
+        }
       })
     );
+
+    // Overlay: Esri labels/roads/borders on top
+    scene.imageryLayers.addImageryProvider(
+      new Cesium.UrlTemplateImageryProvider({
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+        maximumLevel: 19,
+        credit: 'Esri Reference Labels',
+        alpha: 0.6,
+      })
+    );
+
+    LOG.add('[MAP] Bing Aerial + Esri labels — globe ONLINE', 'sig');
+    UI.setStatus('globe', 'ONLINE', 'ok');
+  } catch (err) {
+    console.warn('Globe imagery failed:', err.message);
+    LOG.add(`[WARN] Globe imagery failed — ${err.message}`, 'warn');
+    UI.setStatus('globe', 'DEGRADED', 'warn');
   }
 }
 
@@ -2508,15 +2534,19 @@ const SATELLITE_MODULE = (() => {
   // ── TLE cache — keyed by group name ──────────────────────────
   const _groupCache = {};
 
+  // Vercel proxy routes Celestrak requests server-side (ISP block bypass)
+  const TLE_PROXY = 'https://open-eye-iota.vercel.app/api/tle';
+
   async function _fetchGroup(group) {
     if (_groupCache[group.name] &&
         (Date.now() - _groupCache[group.name].ts) < 3_600_000)
       return _groupCache[group.name].data;
 
-    const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group.name}&FORMAT=JSON`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const url = `${TLE_PROXY}?group=${encodeURIComponent(group.name)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
     const data = await res.json();
+    if (data.error) throw new Error(data.error);
     if (!Array.isArray(data) || data.length === 0)
       throw new Error('Empty group');
     _groupCache[group.name] = { data, ts: Date.now() };

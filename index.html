@@ -1809,15 +1809,14 @@ const NAV_CONTROLLER = (() => {
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  AVIATION_MODULE  —  v6  VERCEL → OPENSKY                   ║
-// ║  Browser → Vercel proxy → OpenSky with Basic Auth           ║
-// ║  Single global call, up to 15,000 real flights              ║
+// ║  AVIATION_MODULE  —  v7  VERCEL → AIRLABS                   ║
+// ║  Browser → Vercel proxy → AirLabs v9 flights API            ║
+// ║  Real global flights, richer data (route, aircraft type)    ║
 // ╚══════════════════════════════════════════════════════════════╝
 const AVIATION_MODULE = (() => {
 
-  // Vercel proxy — makes server-to-server call to OpenSky with credentials
   const PROXY_URL = 'https://open-eye-iota.vercel.app/api/adsb';
-  const POLL_MS   = 15000;   // Poll every 15s (OpenSky: 10 req/min registered)
+  const POLL_MS   = 60000;  // 60s — conserves AirLabs 1000/month quota (~720/month)
 
   // ── Military classification ───────────────────────────────────
   const MIL_PREFIXES = [
@@ -1841,7 +1840,6 @@ const AVIATION_MODULE = (() => {
   function _classify(f) {
     const cs  = (f.callsign || '').trim().toUpperCase();
     const hex = (f.icao24   || '').toLowerCase();
-    // Category 1 = no ADS-B, 2-7 light/medium/heavy, often military if no callsign
     if (!cs || /^[0-9A-F]{4,8}$/.test(cs)) return 'MILITARY';
     if (MIL_PREFIXES.some(p => cs.startsWith(p))) return 'MILITARY';
     if (MIL_HEX.some(p => hex.startsWith(p)))     return 'MILITARY';
@@ -1851,34 +1849,30 @@ const AVIATION_MODULE = (() => {
   // ── Aircraft icon canvas ──────────────────────────────────────
   const _iconCache = {};
   function _makeIcon(type, heading) {
-    const SZ = 40;
-    const c  = document.createElement('canvas');
-    c.width  = c.height = SZ;
-    const ctx = c.getContext('2d');
+    const SZ = 40, c = document.createElement('canvas');
+    c.width = c.height = SZ;
+    const ctx  = c.getContext('2d');
     const col  = type === 'MILITARY' ? '#ff9900' : '#00ff9d';
     const glow = type === 'MILITARY' ? '#ff6600' : '#00cc77';
     ctx.save();
     ctx.translate(SZ/2, SZ/2);
-    ctx.rotate(((heading || 0) - 0) * Math.PI / 180);
+    ctx.rotate((heading || 0) * Math.PI / 180);
     ctx.shadowColor = glow; ctx.shadowBlur = 12;
-    ctx.fillStyle   = col;  ctx.strokeStyle = col; ctx.lineWidth = 1;
-    // Fuselage
+    ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(0, -14); ctx.lineTo(3, -4); ctx.lineTo(3, 6);
-    ctx.lineTo(0, 8);   ctx.lineTo(-3, 6); ctx.lineTo(-3, -4);
+    ctx.moveTo(0,-14); ctx.lineTo(3,-4); ctx.lineTo(3,6);
+    ctx.lineTo(0,8);   ctx.lineTo(-3,6); ctx.lineTo(-3,-4);
     ctx.closePath(); ctx.fill();
-    // Wings
     ctx.beginPath();
-    ctx.moveTo(-3, 0); ctx.lineTo(-14, 4); ctx.lineTo(-14, 6);
-    ctx.lineTo(-3, 4); ctx.closePath(); ctx.fill();
+    ctx.moveTo(-3,0); ctx.lineTo(-14,4); ctx.lineTo(-14,6);
+    ctx.lineTo(-3,4); ctx.closePath(); ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(3, 0);  ctx.lineTo(14, 4);  ctx.lineTo(14, 6);
-    ctx.lineTo(3, 4);  ctx.closePath(); ctx.fill();
-    // Tail
+    ctx.moveTo(3,0);  ctx.lineTo(14,4); ctx.lineTo(14,6);
+    ctx.lineTo(3,4);  ctx.closePath(); ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(-2, 6); ctx.lineTo(-6, 10); ctx.lineTo(-6, 11);
-    ctx.lineTo(0, 8);  ctx.lineTo(6, 11);  ctx.lineTo(6, 10);
-    ctx.lineTo(2, 6);  ctx.closePath(); ctx.fill();
+    ctx.moveTo(-2,6); ctx.lineTo(-6,10); ctx.lineTo(-6,11);
+    ctx.lineTo(0,8);  ctx.lineTo(6,11);  ctx.lineTo(6,10);
+    ctx.lineTo(2,6);  ctx.closePath(); ctx.fill();
     ctx.restore();
     return c;
   }
@@ -1890,13 +1884,12 @@ const AVIATION_MODULE = (() => {
   }
 
   // ── State ─────────────────────────────────────────────────────
-  const _flights   = new Map();  // icao24 → flight data
-  const _drState   = new Map();  // icao24 → dead-reckoning state
+  const _drState   = new Map();
   let   _pollTimer = null;
   let   _drTimer   = null;
   let   _lastCount = 0;
 
-  // ── Dead-reckoning — smooth movement between polls ────────────
+  // ── Dead-reckoning ────────────────────────────────────────────
   function _startDR() {
     if (_drTimer) clearInterval(_drTimer);
     _drTimer = setInterval(() => {
@@ -1909,7 +1902,7 @@ const AVIATION_MODULE = (() => {
         const distM  = spdMs * dt;
         const R      = 6371000;
         const hdgRad = dr.heading * Math.PI / 180;
-        const latRad = dr.lat     * Math.PI / 180;
+        const latRad = dr.lat * Math.PI / 180;
         dr.lat += (distM / R) * (180 / Math.PI) * Math.cos(hdgRad);
         dr.lon += (distM / R) * (180 / Math.PI) / Math.cos(latRad) * Math.sin(hdgRad);
         dr.lat  = Math.max(-89, Math.min(89, dr.lat));
@@ -1936,17 +1929,15 @@ const AVIATION_MODULE = (() => {
 
     flights.forEach(f => {
       if (!isFinite(f.lat) || !isFinite(f.lon)) return;
-      if (f.lat < -90  || f.lat > 90)  return;
-      if (f.lon < -180 || f.lon > 180) return;
+      if (f.lat < -90 || f.lat > 90 || f.lon < -180 || f.lon > 180) return;
 
-      const cls   = _classify(f);
+      const cls = _classify(f);
       f.classification = cls;
       if (cls === 'MILITARY') {
         milCount++;
         LOG.add(`[SIGINT] MIL — ${(f.callsign||f.icao24).toUpperCase()} · ${f.country}`, 'warn');
       }
 
-      // OpenSky altitude is in metres
       const altM  = Math.max(f.altitude || 300, 300);
       const altFt = altM * 3.28084;
       const flStr = `FL${Math.round(altFt / 100).toString().padStart(3,'0')}`;
@@ -1961,8 +1952,8 @@ const AVIATION_MODULE = (() => {
           width:  cls === 'MILITARY' ? 32 : 28,
           height: cls === 'MILITARY' ? 32 : 28,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          scaleByDistance:       new Cesium.NearFarScalar(80_000,  1.4, 8_000_000, 0.25),
-          translucencyByDistance:new Cesium.NearFarScalar(100_000, 1.0,12_000_000, 0.4),
+          scaleByDistance:        new Cesium.NearFarScalar(80_000,  1.4, 8_000_000, 0.25),
+          translucencyByDistance: new Cesium.NearFarScalar(100_000, 1.0,12_000_000, 0.4),
           disableDepthTestDistance: 500,
         },
         polyline: {
@@ -1979,8 +1970,7 @@ const AVIATION_MODULE = (() => {
           text: f.callsign || (f.icao24 || '').toUpperCase(),
           font: '11px Share Tech Mono, monospace',
           fillColor:    Cesium.Color.fromCssColorString(col),
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 2,
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
           style:        Cesium.LabelStyle.FILL_AND_OUTLINE,
           pixelOffset:  new Cesium.Cartesian2(0, -22),
           scaleByDistance: new Cesium.NearFarScalar(80_000, 1.0, 2_500_000, 0.0),
@@ -1992,18 +1982,16 @@ const AVIATION_MODULE = (() => {
       });
 
       entity._oeData = { ...f, type:'flight', altM, flStr };
-
       _drState.set((f.icao24 || '').toLowerCase() || f.callsign, {
         lat: f.lat, lon: f.lon, alt: altM,
-        heading:  f.heading  || 0,
-        velocity: f.velocity || 0,
+        heading: f.heading || 0, velocity: f.velocity || 0,
         lastTick: Date.now(),
       });
 
       feedItems.push({
-        type:'flight',
+        type: 'flight',
         name: f.callsign || (f.icao24||'').toUpperCase(),
-        sub:  `${f.country} · ${flStr} · ${f.velocity!=null?f.velocity+'km/h':'?'}`,
+        sub:  `${f.country} · ${flStr} · ${f.velocity?f.velocity+'km/h':'?'}${f.depIata&&f.arrIata?' · '+f.depIata+'→'+f.arrIata:''}`,
         color: col,
         tag:      cls==='MILITARY' ? 'tag-mil' : 'tag-air',
         tagLabel: cls==='MILITARY' ? 'MIL'     : 'CIV',
@@ -2012,18 +2000,16 @@ const AVIATION_MODULE = (() => {
       });
     });
 
-    _startDR();
-
-    // Update active set for dead-reckoning cleanup
     const activeHex = new Set(flights.map(f => (f.icao24||'').toLowerCase()));
     for (const key of _drState.keys()) {
       if (!activeHex.has(key)) _drState.delete(key);
     }
 
+    _startDR();
     layer.count = flights.length;
     LAYER_REGISTRY._sync('AVIATION');
     UI.renderFeed(feedItems);
-    LOG.add(`[AVIATION] ${flights.length} contacts · ${milCount} military`, 'sig');
+    LOG.add(`[AVIATION] ${flights.length} contacts · ${milCount} military · via AirLabs`, 'sig');
     UI.setStatus('aviation', `LIVE · ${flights.length}`, 'ok');
     document.getElementById('sb-flights').innerHTML = `FLIGHTS <span>${flights.length}</span>`;
     document.getElementById('sb-demo').style.display = 'none';
@@ -2039,22 +2025,14 @@ const AVIATION_MODULE = (() => {
       });
       if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
       const data = await res.json();
-
       if (data.error) throw new Error(data.error);
-
-      const flights = (data.states || []);
-      if (flights.length === 0) throw new Error('Empty response');
-
-      LOG.add(`[AVIATION] OpenSky via proxy: ${flights.length} flights`, 'sig');
+      const flights = data.flights || [];
+      if (flights.length === 0) throw new Error('Empty response from AirLabs');
       _render(flights);
-
     } catch(e) {
       LOG.add(`[AVIATION] Proxy failed: ${e.message}`, 'warn');
       UI.setStatus('aviation', 'FALLBACK', 'err');
-      // Keep existing flights on globe if we have them — don't clear
-      if (_lastCount > 0) {
-        LOG.add('[AVIATION] Keeping previous data until next poll', 'sys');
-      }
+      if (_lastCount > 0) LOG.add('[AVIATION] Keeping previous data until next poll', 'sys');
     }
   }
 
@@ -2065,38 +2043,38 @@ const AVIATION_MODULE = (() => {
     const badge = cls === 'MILITARY'
       ? `<span class="detail-badge" style="color:var(--orange);border:1px solid rgba(255,153,0,0.4);background:rgba(255,153,0,0.08)">⚠ MILITARY</span>`
       : `<span class="detail-badge" style="color:var(--cyan);border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.08)">✈ COMMERCIAL</span>`;
-    const altFt = d.altM ? Math.round(d.altM * 3.28084) : 0;
-    const fl    = d.flStr || '—';
-    const spd   = d.velocity != null ? `${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)` : '—';
-    const hdg   = d.heading  != null ? `${Math.round(d.heading)}°` : '—';
-    const vr    = d.vrate != null
+    const fl  = d.flStr || '—';
+    const spd = d.velocity ? `${d.velocity} km/h (${Math.round(d.velocity/1.852)} kts)` : '—';
+    const hdg = d.heading  != null ? `${Math.round(d.heading)}°` : '—';
+    const vr  = d.vrate != null
       ? `<span style="color:${d.vrate>0?'var(--g)':d.vrate<0?'var(--red)':'inherit'}">${d.vrate>0?'▲':d.vrate<0?'▼':'—'} ${Math.abs(d.vrate)} m/s</span>`
       : '—';
-    const sq = d.squawk
+    const sq  = d.squawk
       ? `<span style="${['7500','7600','7700'].includes(d.squawk)?'color:var(--red);font-weight:bold':''}">${d.squawk}</span>`
       : '—';
+    const route = (d.depIata && d.arrIata) ? `${d.depIata} → ${d.arrIata}` : '—';
     return `
       <div class="detail-name" style="color:${col}">${d.callsign||(d.icao24||'').toUpperCase()||'UNKNOWN'}</div>
       ${badge}
       <div class="detail-grid" style="margin-top:6px">
         <div><div class="dg-cell-label">ICAO24</div><div class="dg-cell-value">${(d.icao24||'—').toUpperCase()}</div></div>
-        <div><div class="dg-cell-label">Country</div><div class="dg-cell-value">${d.country||'—'}</div></div>
+        <div><div class="dg-cell-label">Country</div><div class="dg-cell-value">${d.country||'—'} ${d.reg?'· '+d.reg:''}</div></div>
         <div><div class="dg-cell-label">Flight Level</div><div class="dg-cell-value" style="color:${col};font-weight:bold">${fl}</div></div>
+        <div><div class="dg-cell-label">Aircraft</div><div class="dg-cell-value">${d.acType||'—'}</div></div>
         <div><div class="dg-cell-label">Speed</div><div class="dg-cell-value">${spd}</div></div>
         <div><div class="dg-cell-label">Heading</div><div class="dg-cell-value">${hdg}</div></div>
         <div><div class="dg-cell-label">Vert Rate</div><div class="dg-cell-value">${vr}</div></div>
         <div><div class="dg-cell-label">Squawk</div><div class="dg-cell-value">${sq}</div></div>
-        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">OpenSky · Vercel</div></div>
+        <div><div class="dg-cell-label">Route</div><div class="dg-cell-value">${route}</div></div>
+        <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">AirLabs · Vercel</div></div>
       </div>`;
   };
 
   // ── Boot ──────────────────────────────────────────────────────
   LAYER_REGISTRY.AVIATION.refresh = async function() { await _poll(); };
 
-  LOG.add('[AVIATION] v6 — Vercel proxy → OpenSky global feed', 'air');
+  LOG.add('[AVIATION] v7 — Vercel proxy → AirLabs global flights', 'air');
   UI.setStatus('aviation', 'LOADING', 'warn');
-
-  // First poll immediately, then every 15s
   _poll();
   _pollTimer = setInterval(_poll, POLL_MS);
 

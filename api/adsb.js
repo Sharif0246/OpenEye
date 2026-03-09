@@ -1,63 +1,66 @@
-// api/adsb.js — Vercel Serverless Proxy → OpenSky Network
-// Server-to-server call with Basic Auth — bypasses all CORS restrictions.
-// OpenSky registered account: higher rate limit, global snapshot up to 15,000 flights.
+// api/adsb.js — Vercel Serverless Proxy → AirLabs Flights API
+// Server-to-server call — API key never exposed to browser.
+// AirLabs free tier: 1,000 req/month. Polling every 60s = ~720/month.
+// Response fields: hex, flight_icao, flag, lat, lng, alt, dir, speed, v_speed, squawk, aircraft_icao
 
-const OPENSKY_USER = 'sharifopeneye';
-const OPENSKY_PASS = 'Sharifopeneye0246';
+const AIRLABS_KEY = '5aec3b5f-b400-42ad-891f-c9bb278a9bc0';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Cache-Control', 's-maxage=10, stale-while-revalidate=5');
+  // Cache 55s — slightly under poll interval to always serve fresh data
+  res.setHeader('Cache-Control', 's-maxage=55, stale-while-revalidate=10');
 
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
   try {
-    const auth = Buffer.from(`${OPENSKY_USER}:${OPENSKY_PASS}`).toString('base64');
+    const url = `https://airlabs.co/api/v9/flights?api_key=${AIRLABS_KEY}`;
 
-    const response = await fetch('https://opensky-network.org/api/states/all', {
-      headers: {
-        'Authorization': `Basic ${auth}`,
-        'User-Agent': 'OpenEyeOSINT/1.0',
-      },
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'OpenEyeOSINT/1.0' },
       signal: AbortSignal.timeout(20000),
     });
 
-    if (!response.ok) throw new Error(`OpenSky HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`AirLabs HTTP ${response.status}`);
 
     const data = await response.json();
 
-    const states = (data.states || [])
-      .filter(s =>
-        s[5] != null && s[6] != null &&
-        !s[8] &&
-        Math.abs(s[6]) <= 90 &&
-        Math.abs(s[5]) <= 180
+    if (data.error) throw new Error(data.error.message || 'AirLabs error');
+
+    // Normalize to our format — filter out on-ground and invalid positions
+    const flights = (data.response || [])
+      .filter(f =>
+        f.lat != null && f.lng != null &&
+        isFinite(f.lat) && isFinite(f.lng) &&
+        Math.abs(f.lat) <= 90 && Math.abs(f.lng) <= 180 &&
+        f.alt > 50   // above ground
       )
-      .map(s => ({
-        icao24:   s[0] || '',
-        callsign: (s[1] || '').trim(),
-        country:  s[2] || '?',
-        lon:      s[5],
-        lat:      s[6],
-        altitude: s[7] || s[13] || 1000,
-        onGround: false,
-        velocity: s[9] != null ? Math.round(s[9] * 3.6) : null,
-        heading:  s[10] || 0,
-        vrate:    s[11] != null ? Math.round(s[11]) : null,
-        squawk:   s[14] || null,
-        category: s[17] || 0,
+      .map(f => ({
+        icao24:      (f.hex         || '').toLowerCase(),
+        callsign:    (f.flight_icao || f.flight_iata || f.hex || '').trim(),
+        country:     f.flag         || '?',
+        lat:         f.lat,
+        lon:         f.lng,           // AirLabs uses 'lng', we use 'lon'
+        altitude:    f.alt  || 1000,  // metres
+        velocity:    f.speed || 0,    // km/h already
+        heading:     f.dir   || 0,
+        vrate:       f.v_speed != null ? Math.round(f.v_speed) : null,
+        squawk:      f.squawk || null,
+        acType:      f.aircraft_icao || null,
+        reg:         f.reg_number    || null,
+        depIata:     f.dep_iata      || null,
+        arrIata:     f.arr_iata      || null,
       }));
 
     res.status(200).json({
-      states,
-      total:  states.length,
-      time:   data.time || Math.floor(Date.now() / 1000),
+      flights,
+      total: flights.length,
+      time:  Math.floor(Date.now() / 1000),
     });
 
   } catch (err) {
-    console.error('OpenSky proxy error:', err.message);
-    res.status(502).json({ error: err.message, states: [], total: 0 });
+    console.error('AirLabs proxy error:', err.message);
+    res.status(502).json({ error: err.message, flights: [], total: 0 });
   }
 }

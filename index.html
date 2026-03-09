@@ -866,7 +866,7 @@ body::after {
 // 🔑  TOKEN  — paste your Cesium Ion key here
 //     Free at: https://ion.cesium.com/tokens
 // ──────────────────────────────────────────────────────────────
-const CESIUM_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJmNDUyNGRjYy0xMzBlLTQ1YWUtYTM2Yy1mOThhNzI4MzAwY2IiLCJpZCI6Mzk5MjYwLCJpYXQiOjE3NzI4MjgxMzJ9.o-PgYk8GEbN_AdQi8U-qgIXt2FOagAw4aya6_87PgN8';
+const CESIUM_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI5YjExOTkwYy00NjE1LTQxZDgtYjkxNy05YmFiY2JiYWUxMmQiLCJpZCI6NDAwNzgyLCJpYXQiOjE3NzMwNjI0NjF9.HRw0k1AFkMnrAoWjrLrLbvsVKnvktQK6WL29nDrcykc';
 Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
 
 
@@ -1861,14 +1861,18 @@ const AVIATION_MODULE = (() => {
   // ── Initialise GPU collections ────────────────────────────────
   function _initCollections() {
     const layer = LAYER_REGISTRY.AVIATION;
-    // Clear any old entities
     layer.entities.entities.removeAll();
-
-    if (_pointCollection) { try { viewer.scene.primitives.remove(_pointCollection); } catch(e){} }
-    if (_labelCollection) { try { viewer.scene.primitives.remove(_labelCollection); } catch(e){} }
-
-    _pointCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
-    _labelCollection = viewer.scene.primitives.add(new Cesium.LabelCollection());
+    // Only remove if they exist and aren't destroyed
+    if (_pointCollection && !_pointCollection.isDestroyed()) {
+      _pointCollection.removeAll();
+    } else {
+      _pointCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    }
+    if (_labelCollection && !_labelCollection.isDestroyed()) {
+      _labelCollection.removeAll();
+    } else {
+      _labelCollection = viewer.scene.primitives.add(new Cesium.LabelCollection());
+    }
     _pointIndex.clear();
     _flightData.clear();
   }
@@ -1976,7 +1980,7 @@ const AVIATION_MODULE = (() => {
           if (pt) pt.position = Cesium.Cartesian3.fromDegrees(dr.lon, dr.lat, dr.alt);
         } catch(e) {}
       });
-    }, 1000);
+    }, 5000);
   }
 
   // ── Click handler — show full entity detail for selected ──────
@@ -2445,174 +2449,282 @@ const MARITIME_MODULE = (() => {
 
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  SATELLITE_MODULE  —  v4  SATELLITE.JS SGP4                 ║
-// ║  TLE source: tle.ivanstanojevic.me (CORS-safe)              ║
-// ║  Propagator: satellite.js (FlightRadar24-grade SGP4)        ║
+// ║  SATELLITE_MODULE  —  v6  CELESTRAK GROUP FETCH             ║
+// ║  Fetches full groups in single JSON requests                ║
+// ║  ~700 real diverse satellites, no Starlink spam             ║
+// ║  SGP4 every 5s — GPU point rendering                       ║
 // ╚══════════════════════════════════════════════════════════════╝
 const SATELLITE_MODULE = (() => {
 
-  const SAT_CATALOG=[
-    {norad:'25544',name:'ISS',            cat:'STATION', color:'#00ff9d',priority:1},
-    {norad:'48274',name:'CSS Tiangong',   cat:'STATION', color:'#ff9900',priority:1},
-    {norad:'35752',name:'GPS IIF-2',      cat:'GPS',     color:'#b44fff',priority:2},
-    {norad:'37753',name:'GLONASS-M 747',  cat:'GLONASS', color:'#9944ff',priority:2},
-    {norad:'37846',name:'GALILEO-101',    cat:'GALILEO', color:'#aa44ff',priority:2},
-    {norad:'44231',name:'BEIDOU-3 M5',    cat:'BEIDOU',  color:'#cc44ff',priority:2},
-    {norad:'38337',name:'SUOMI NPP',      cat:'WEATHER', color:'#ffe600',priority:1},
-    {norad:'41240',name:'GOES-16',        cat:'WEATHER', color:'#ffe600',priority:1},
-    {norad:'43226',name:'HIMAWARI-9',     cat:'WEATHER', color:'#ffaa00',priority:1},
-    {norad:'28654',name:'NOAA-18',        cat:'WEATHER', color:'#ffe600',priority:1},
-    {norad:'29499',name:'NOAA-19',        cat:'WEATHER', color:'#ffe600',priority:1},
-    {norad:'40069',name:'METEOR-M N2',    cat:'WEATHER', color:'#ffaa00',priority:2},
-    {norad:'25994',name:'TERRA',          cat:'EO',      color:'#c8ff00',priority:1},
-    {norad:'27424',name:'AQUA',           cat:'EO',      color:'#c8ff00',priority:1},
-    {norad:'43689',name:'SENTINEL-3B',    cat:'EO',      color:'#c8ff00',priority:2},
-    {norad:'39634',name:'RESOURCESAT-2',  cat:'EO',      color:'#c8ff00',priority:2},
-    {norad:'46495',name:'LANDSAT-9',      cat:'EO',      color:'#c8ff00',priority:2},
-    {norad:'43286',name:'BANGABANDHU-1',  cat:'GEO',     color:'#00d4ff',priority:1},
-    {norad:'41838',name:'GSAT-18',        cat:'GEO',     color:'#00d4ff',priority:2},
-    {norad:'36395',name:'INTELSAT-14',    cat:'GEO',     color:'#00d4ff',priority:2},
-    {norad:'27386',name:'USA-186',        cat:'MIL',     color:'#ff3c3c',priority:1},
-    {norad:'41588',name:'USA-267',         cat:'MIL',     color:'#ff5555',priority:2},
-    {norad:'25682',name:'USA-110',        cat:'MIL',     color:'#ff3c3c',priority:2},
-    {norad:'44406',name:'DUCHIFAT-3',      cat:'AMATEUR', color:'#44ffcc',priority:2},
-    {norad:'07530',name:'OSCAR-7',        cat:'AMATEUR', color:'#44ffcc',priority:2},
+  // Each group = one HTTP request returning many satellites
+  // Total: ~700 meaningful satellites across all categories
+  const GROUPS = [
+    { name:'stations',  color:'#00ff9d', cat:'STATION', priority:1 },
+    { name:'weather',   color:'#ffe600', cat:'WEATHER', priority:1 },
+    { name:'noaa',      color:'#ffcc00', cat:'WEATHER', priority:2 },
+    { name:'goes',      color:'#ffaa00', cat:'WEATHER', priority:1 },
+    { name:'resource',  color:'#c8ff00', cat:'EO',      priority:2 },
+    { name:'sarsat',    color:'#ff9900', cat:'SAR',     priority:2 },
+    { name:'dmc',       color:'#c8ff00', cat:'EO',      priority:2 },
+    { name:'tdrss',     color:'#00d4ff', cat:'COMMS',   priority:2 },
+    { name:'argos',     color:'#c8ff00', cat:'EO',      priority:2 },
+    { name:'planet',    color:'#44ffcc', cat:'EO',      priority:2 },
+    { name:'spire',     color:'#44ffcc', cat:'EO',      priority:3 },
+    { name:'geo',       color:'#00d4ff', cat:'GEO',     priority:2 },
+    { name:'intelsat',  color:'#00ccff', cat:'COMMS',   priority:2 },
+    { name:'ses',       color:'#00aaff', cat:'COMMS',   priority:2 },
+    { name:'iridium',   color:'#44ffcc', cat:'COMMS',   priority:2 },
+    { name:'iridium-NEXT', color:'#44ffcc', cat:'COMMS',priority:2 },
+    { name:'orbcomm',   color:'#44ffcc', cat:'COMMS',   priority:3 },
+    { name:'globalstar',color:'#44ccff', cat:'COMMS',   priority:3 },
+    { name:'swarm',     color:'#44ccff', cat:'COMMS',   priority:3 },
+    { name:'amateur',   color:'#44ffcc', cat:'AMATEUR', priority:2 },
+    { name:'x-comm',    color:'#ff44cc', cat:'XCOMM',   priority:3 },
+    { name:'other-comm',color:'#44ccff', cat:'COMMS',   priority:3 },
+    { name:'gps-ops',   color:'#b44fff', cat:'GPS',     priority:1 },
+    { name:'glo-ops',   color:'#9944ff', cat:'GLONASS', priority:1 },
+    { name:'galileo',   color:'#aa44ff', cat:'GALILEO', priority:1 },
+    { name:'beidou',    color:'#cc44ff', cat:'BEIDOU',  priority:1 },
+    { name:'sbas',      color:'#dd44ff', cat:'GNSS',    priority:2 },
+    { name:'nnss',      color:'#cc44dd', cat:'NAVSAT',  priority:3 },
+    { name:'musson',    color:'#cc44dd', cat:'NAVSAT',  priority:3 },
+    { name:'science',   color:'#44ffcc', cat:'SCIENCE', priority:2 },
+    { name:'geodetic',  color:'#44ffcc', cat:'SCIENCE', priority:3 },
+    { name:'engineering',color:'#44ffcc',cat:'SCIENCE', priority:3 },
+    { name:'military',  color:'#ff3c3c', cat:'MIL',     priority:1 },
+    { name:'radar',     color:'#ff5555', cat:'MIL',     priority:2 },
+    { name:'cubesat',   color:'#88ffcc', cat:'CUBESAT', priority:3 },
+    { name:'other',     color:'#666666', cat:'OTHER',   priority:3 },
   ];
 
-  const _tleCache={};
-  async function _fetchTLE(norad){
-    if(_tleCache[norad]&&(Date.now()-_tleCache[norad].ts)<3_600_000) return _tleCache[norad].tle;
-    const res=await fetch(`https://tle.ivanstanojevic.me/api/tle/${norad}`,{signal:AbortSignal.timeout(12000)});
-    if(!res.ok) throw new Error(`Ivan TLE HTTP ${res.status}`);
-    const j=await res.json();
-    if(!j.line1||!j.line2||j.line1.length<69||j.line2.length<69) throw new Error(`Bad TLE NORAD ${norad}`);
-    const tle={name:j.name||String(norad),line1:j.line1.trim(),line2:j.line2.trim()};
-    _tleCache[norad]={tle,ts:Date.now()};return tle;
+  const CAT_COLORS = {
+    STATION:'#00ff9d', GPS:'#b44fff', GLONASS:'#9944ff', GALILEO:'#aa44ff',
+    BEIDOU:'#cc44ff',  WEATHER:'#ffe600', EO:'#c8ff00',  GEO:'#00d4ff',
+    COMMS:'#44ccff',   MIL:'#ff3c3c', SCIENCE:'#44ffcc', AMATEUR:'#44ffcc',
+    SAR:'#ff9900',     GNSS:'#dd44ff', NAVSAT:'#cc44dd', CUBESAT:'#88ffcc',
+    OTHER:'#555555',   XCOMM:'#ff44cc',
+  };
+
+  // ── TLE cache — keyed by group name ──────────────────────────
+  const _groupCache = {};
+
+  async function _fetchGroup(group) {
+    if (_groupCache[group.name] &&
+        (Date.now() - _groupCache[group.name].ts) < 3_600_000)
+      return _groupCache[group.name].data;
+
+    const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group.name}&FORMAT=JSON`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0)
+      throw new Error('Empty group');
+    _groupCache[group.name] = { data, ts: Date.now() };
+    LOG.add(`[SAT] ${group.name}: ${data.length} TLEs loaded`, 'sys');
+    return data;
   }
 
-  function _getPosition(tle){
-    try{
-      const satrec=satellite.twoline2satrec(tle.line1,tle.line2);
-      const now=new Date();
-      const pv=satellite.propagate(satrec,now);
-      if(!pv.position||pv.position===true) return null;
-      const gmst=satellite.gstime(now);
-      const geo=satellite.eciToGeodetic(pv.position,gmst);
-      const lat=satellite.degreesLat(geo.latitude);
-      const lon=satellite.degreesLong(geo.longitude);
-      const altKm=geo.height;
-      if(!isFinite(lat)||!isFinite(lon)||!isFinite(altKm)||altKm<0) return null;
-      return {lat,lon,altM:altKm*1000,altKm:Math.round(altKm)};
-    }catch(e){return null;}
+  // ── SGP4 position from Celestrak JSON object ──────────────────
+  function _getPosition(obj) {
+    try {
+      const satrec = satellite.twoline2satrec(obj.TLE_LINE1, obj.TLE_LINE2);
+      const now    = new Date();
+      const pv     = satellite.propagate(satrec, now);
+      if (!pv?.position || typeof pv.position.x !== 'number') return null;
+      const gmst   = satellite.gstime(now);
+      const geo    = satellite.eciToGeodetic(pv.position, gmst);
+      const lat    = satellite.degreesLat(geo.latitude);
+      const lon    = satellite.degreesLong(geo.longitude);
+      const altKm  = geo.height;
+      if (!isFinite(lat) || !isFinite(lon) || !isFinite(altKm) || altKm < 0) return null;
+      return { lat, lon, altM: altKm * 1000, altKm: Math.round(altKm) };
+    } catch(e) { return null; }
   }
 
-  function _buildOrbitPath(tle){
-    try{
-      const satrec=satellite.twoline2satrec(tle.line1,tle.line2);
-      const mm=satrec.no*(1440/(2*Math.PI));
-      if(mm<=0||mm>20) return [];
-      const periodMin=1440/mm,pts=[];
-      for(let i=0;i<=90;i++){
-        const t=new Date(Date.now()+(i/90)*periodMin*60*1000);
-        const pv=satellite.propagate(satrec,t);
-        if(!pv.position||pv.position===true) continue;
-        const gmst=satellite.gstime(t);
-        const geo=satellite.eciToGeodetic(pv.position,gmst);
-        const lat=satellite.degreesLat(geo.latitude);
-        const lon=satellite.degreesLong(geo.longitude);
-        const altM=geo.height*1000;
-        if(isFinite(lat)&&isFinite(lon)&&isFinite(altM)&&altM>0)
-          pts.push(Cesium.Cartesian3.fromDegrees(lon,lat,altM));
+  // ── State ─────────────────────────────────────────────────────
+  const _sats      = new Map(); // norad → {obj, entity, group}
+  let   _tickTimer = null;
+  let   _totalLoaded = 0;
+
+  // ── Load all groups ───────────────────────────────────────────
+  async function _loadAll() {
+    const layer = LAYER_REGISTRY.SATELLITE;
+    _totalLoaded = 0;
+
+    for (const group of GROUPS) {
+      try {
+        const objects = await _fetchGroup(group);
+        const col = group.color;
+
+        for (const obj of objects) {
+          const norad = String(obj.NORAD_CAT_ID || '');
+          if (!norad || _sats.has(norad)) continue; // skip dupes across groups
+
+          const pos = _getPosition(obj);
+          if (!pos) continue;
+
+          const name = (obj.OBJECT_NAME || norad).trim();
+
+          const entity = layer.entities.entities.add({
+            id: `sat_${norad}`,
+            position: Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.altM),
+            point: {
+              pixelSize: group.priority === 1 ? 8 : group.priority === 2 ? 5 : 3,
+              color: Cesium.Color.fromCssColorString(col),
+              outlineColor: Cesium.Color.fromCssColorString(col).withAlpha(0.35),
+              outlineWidth: group.priority === 1 ? 2 : 1,
+              scaleByDistance: new Cesium.NearFarScalar(500_000, 1.8, 80_000_000, 0.2),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            label: {
+              text: name,
+              font: '10px Share Tech Mono, monospace',
+              fillColor: Cesium.Color.fromCssColorString(col),
+              outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              pixelOffset: new Cesium.Cartesian2(0, -14),
+              // Only show labels when zoomed in closely
+              scaleByDistance: new Cesium.NearFarScalar(200_000, 1.0, 5_000_000, 0.0),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              showBackground: true,
+              backgroundColor: Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),
+              backgroundPadding: new Cesium.Cartesian2(3, 2),
+            },
+          });
+
+          entity._oeData = {
+            norad, name, cat: group.cat, color: col,
+            ...pos, type: 'satellite', obj,
+          };
+
+          // Orbital path for priority-1 only
+          if (group.priority === 1) {
+            try {
+              const satrec = satellite.twoline2satrec(obj.TLE_LINE1, obj.TLE_LINE2);
+              const now    = new Date();
+              const pts    = [];
+              for (let m = 0; m <= 90; m += 3) {
+                const t  = new Date(now.getTime() + m * 60000);
+                const pv = satellite.propagate(satrec, t);
+                if (!pv?.position) continue;
+                const g  = satellite.gstime(t);
+                const ge = satellite.eciToGeodetic(pv.position, g);
+                const la = satellite.degreesLat(ge.latitude);
+                const lo = satellite.degreesLong(ge.longitude);
+                const al = ge.height * 1000;
+                if (isFinite(la) && isFinite(lo) && isFinite(al))
+                  pts.push(Cesium.Cartesian3.fromDegrees(lo, la, al));
+              }
+              if (pts.length > 2) {
+                layer.entities.entities.add({
+                  polyline: {
+                    positions: pts, width: 1,
+                    material: new Cesium.PolylineDashMaterialProperty({
+                      color: Cesium.Color.fromCssColorString(col).withAlpha(0.2),
+                      dashLength: 16,
+                    }),
+                    clampToGround: false,
+                  },
+                });
+              }
+            } catch(e) {}
+          }
+
+          _sats.set(norad, { obj, entity, group });
+          _totalLoaded++;
+        }
+
+        // Update status after each group
+        layer.count = _totalLoaded;
+        LAYER_REGISTRY._sync('SATELLITE');
+        UI.setStatus('satellite', `LIVE · ${_totalLoaded}`, 'ok');
+        document.getElementById('sb-sats').innerHTML = `SATS <span>${_totalLoaded}</span>`;
+
+      } catch(err) {
+        LOG.add(`[SAT] Group "${group.name}" failed — ${err.message}`, 'warn');
+        // Continue to next group — never stop loading
       }
-      return pts;
-    }catch(e){return [];}
+
+      // Small pause between group fetches — respect Celestrak
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    LOG.add(`[SAT] ${_totalLoaded} real satellites loaded · SGP4 5s tick`, 'sig');
+    _startTick();
   }
 
-  const _iconCache={};
-  function _makeSatIcon(color,cat){
-    const key=`${color}_${cat}`;if(_iconCache[key]) return _iconCache[key];
-    const SZ=20,c=document.createElement('canvas');c.width=c.height=SZ;
-    const ctx=c.getContext('2d');
-    ctx.shadowColor=color;ctx.shadowBlur=10;ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1.3;
-    if(cat==='STATION'){ctx.strokeRect(4,8,12,4);ctx.fillRect(1,9,3,2);ctx.fillRect(16,9,3,2);ctx.fillRect(9,4,2,12);}
-    else if(cat==='MIL'){ctx.beginPath();ctx.moveTo(10,2);ctx.lineTo(18,10);ctx.lineTo(10,18);ctx.lineTo(2,10);ctx.closePath();ctx.stroke();ctx.fillStyle=color+'33';ctx.fill();}
-    else if(['GPS','GLONASS','GALILEO','BEIDOU'].includes(cat)){ctx.beginPath();for(let i=0;i<6;i++){const a=(i*60-90)*Math.PI/180;i===0?ctx.moveTo(10+8*Math.cos(a),10+8*Math.sin(a)):ctx.lineTo(10+8*Math.cos(a),10+8*Math.sin(a));}ctx.closePath();ctx.stroke();}
-    else{ctx.beginPath();ctx.arc(10,10,5,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(10,2);ctx.lineTo(10,6);ctx.moveTo(10,14);ctx.lineTo(10,18);ctx.moveTo(2,10);ctx.lineTo(6,10);ctx.moveTo(14,10);ctx.lineTo(18,10);ctx.stroke();}
-    _iconCache[key]=c;return c;
-  }
-
-  const _sats=[];let _ticker=null;
-
-  function _tick(){
-    _sats.forEach(sat=>{
-      if(!sat.tle||!sat.entity) return;
-      const pos=_getPosition(sat.tle);if(!pos) return;
-      try{
-        sat.entity.position=Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM);
-        if(sat.entity._oeData){sat.entity._oeData.lat=pos.lat;sat.entity._oeData.lon=pos.lon;sat.entity._oeData.altM=pos.altM;sat.entity._oeData.altKm=pos.altKm;}
-      }catch(e){}
+  // ── Position tick — SGP4 every 5s ────────────────────────────
+  function _tick() {
+    _sats.forEach(({ obj, entity }) => {
+      if (!entity) return;
+      const pos = _getPosition(obj);
+      if (!pos) return;
+      try {
+        entity.position = Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.altM);
+        if (entity._oeData) {
+          entity._oeData.lat   = pos.lat;
+          entity._oeData.lon   = pos.lon;
+          entity._oeData.altM  = pos.altM;
+          entity._oeData.altKm = pos.altKm;
+        }
+      } catch(e) {}
     });
   }
 
-  DETAIL_RENDERERS['satellite']=(d)=>{
-    const col=d.color||'#44ffcc';
-    const badge={STATION:'🛸 SPACE STATION',GPS:'🔵 GPS NAV',GLONASS:'🔵 GLONASS',GALILEO:'🔵 GALILEO',BEIDOU:'🔵 BEIDOU',WEATHER:'🌤 WEATHER',EO:'📷 EARTH OBS',MIL:'🔴 MILITARY',GEO:'🌍 GEO',ONEWEB:'📡 ONEWEB',AMATEUR:'📻 AMATEUR'}[d.cat]||`🛰 ${d.cat||'SAT'}`;
+  function _startTick() {
+    if (_tickTimer) clearInterval(_tickTimer);
+    _tickTimer = setInterval(_tick, 5000);
+  }
+
+  // ── Detail panel ──────────────────────────────────────────────
+  DETAIL_RENDERERS['satellite'] = (d) => {
+    const col = d.color || CAT_COLORS[d.cat] || '#44ffcc';
+    const badges = {
+      STATION:'🛸 SPACE STATION', GPS:'🔵 GPS', GLONASS:'🔵 GLONASS',
+      GALILEO:'🔵 GALILEO', BEIDOU:'🔵 BEIDOU', WEATHER:'🌤 WEATHER',
+      EO:'🌍 EARTH OBS', GEO:'📡 GEO', COMMS:'📡 COMMS', MIL:'⚠ MILITARY',
+      SCIENCE:'🔭 SCIENCE', AMATEUR:'📻 AMATEUR', SAR:'🆘 SAR',
+      CUBESAT:'🎲 CUBESAT', OTHER:'🛰 OTHER',
+    };
     return `
       <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
-      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${badge}</span>
+      <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">
+        ${badges[d.cat]||'🛰 SATELLITE'}
+      </span>
       <div class="detail-grid" style="margin-top:6px">
-        <div><div class="dg-cell-label">NORAD ID</div><div class="dg-cell-value">${d.norad||'—'}</div></div>
-        <div><div class="dg-cell-label">Altitude</div><div class="dg-cell-value" style="color:${col}">${d.altKm?d.altKm.toLocaleString()+' km':'—'}</div></div>
-        <div><div class="dg-cell-label">Latitude</div><div class="dg-cell-value">${d.lat!=null?d.lat.toFixed(3)+'°':'—'}</div></div>
-        <div><div class="dg-cell-label">Longitude</div><div class="dg-cell-value">${d.lon!=null?d.lon.toFixed(3)+'°':'—'}</div></div>
+        <div><div class="dg-cell-label">NORAD</div><div class="dg-cell-value">${d.norad||'—'}</div></div>
         <div><div class="dg-cell-label">Category</div><div class="dg-cell-value">${d.cat||'—'}</div></div>
-        <div><div class="dg-cell-label">Propagator</div><div class="dg-cell-value">satellite.js SGP4</div></div>
+        <div><div class="dg-cell-label">Altitude</div>
+          <div class="dg-cell-value" style="color:${col}">${d.altKm?d.altKm+' km':'—'}</div></div>
+        <div><div class="dg-cell-label">Lat</div>
+          <div class="dg-cell-value">${d.lat?d.lat.toFixed(4)+'°':'—'}</div></div>
+        <div><div class="dg-cell-label">Lon</div>
+          <div class="dg-cell-value">${d.lon?d.lon.toFixed(4)+'°':'—'}</div></div>
+        <div><div class="dg-cell-label">Source</div>
+          <div class="dg-cell-value">Celestrak · SGP4</div></div>
       </div>`;
   };
 
-  LAYER_REGISTRY.SATELLITE.refresh=async function(){
-    UI.setStatus('satellite','FETCHING','warn');
-    LOG.add(`[SAT] Loading ${SAT_CATALOG.length} satellites...`,'sys');
-    const layer=LAYER_REGISTRY.SATELLITE;
-    layer.entities.entities.removeAll();_sats.length=0;
-    if(_ticker){clearInterval(_ticker);_ticker=null;}
-    const seen=new Set();
-    const unique=SAT_CATALOG.filter(m=>{if(seen.has(m.norad))return false;seen.add(m.norad);return true;});
-    let rendered=0;
-    for(const meta of unique){
-      try{
-        const tle=await _fetchTLE(meta.norad);
-        const pos=_getPosition(tle);
-        if(!pos) throw new Error('SGP4 null');
-        if(meta.priority===1){
-          const pts=_buildOrbitPath(tle);
-          if(pts.length>=4){layer.entities.entities.add({polyline:{positions:pts,width:1.5,material:new Cesium.PolylineGlowMaterialProperty({glowPower:0.2,color:Cesium.Color.fromCssColorString(meta.color).withAlpha(0.5)}),clampToGround:false,arcType:Cesium.ArcType.NONE}});}
-        }
-        const icon=_makeSatIcon(meta.color,meta.cat);const sz=meta.priority===1?20:13;
-        const entity=layer.entities.entities.add({
-          position:Cesium.Cartesian3.fromDegrees(pos.lon,pos.lat,pos.altM),
-          point:{pixelSize:meta.priority===1?7:5,color:Cesium.Color.fromCssColorString(meta.color),outlineColor:Cesium.Color.BLACK,outlineWidth:1,scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,30_000_000,0.3),disableDepthTestDistance:500},
-          billboard:{image:icon,width:sz,height:sz,verticalOrigin:Cesium.VerticalOrigin.CENTER,scaleByDistance:new Cesium.NearFarScalar(500_000,1.2,8_000_000,0.0),disableDepthTestDistance:500},
-          label:{text:meta.name,font:'9px Share Tech Mono, monospace',fillColor:Cesium.Color.fromCssColorString(meta.color),outlineColor:Cesium.Color.BLACK,outlineWidth:2,style:Cesium.LabelStyle.FILL_AND_OUTLINE,pixelOffset:new Cesium.Cartesian2(0,-14),scaleByDistance:meta.priority===1?new Cesium.NearFarScalar(500_000,1.0,10_000_000,0.0):new Cesium.NearFarScalar(500_000,0.8,3_000_000,0.0),disableDepthTestDistance:500,showBackground:meta.priority===1,backgroundColor:Cesium.Color.fromCssColorString('#020408').withAlpha(0.7),backgroundPadding:new Cesium.Cartesian2(3,2)},
-        });
-        entity._oeData={...meta,...pos,type:'satellite',classification:meta.cat};
-        _sats.push({tle,entity,meta});rendered++;
-        layer.count=rendered;LAYER_REGISTRY._sync('SATELLITE');
-        document.getElementById('sb-sats').innerHTML=`SATS <span>${rendered}</span>`;
-        UI.setStatus('satellite',`LIVE · ${rendered}`,'ok');
-        LOG.add(`[SAT] ✓ ${meta.name} @ ${pos.altKm}km`,'sat');
-      }catch(e){LOG.add(`[SAT] ✗ ${meta.name} — ${e.message}`,'warn');}
-      await new Promise(r=>setTimeout(r,600));
-    }
-    if(rendered===0){UI.setStatus('satellite','OFFLINE','err');return;}
-    _ticker=setInterval(_tick,5000);
-    LOG.add(`[SAT] ${rendered} active — SGP4 5s tick`,'sat');
+  // ── Boot ──────────────────────────────────────────────────────
+  LAYER_REGISTRY.SATELLITE.refresh = async function() {
+    _sats.clear();
+    LAYER_REGISTRY.SATELLITE.entities.entities.removeAll();
+    if (_tickTimer) { clearInterval(_tickTimer); _tickTimer = null; }
+    Object.keys(_groupCache).forEach(k => delete _groupCache[k]);
+    _loadAll();
   };
 
-  LOG.add('[SAT] v4 — satellite.js SGP4 + Ivan TLE','sat');
-  UI.setStatus('satellite','LOADING','warn');
-  setTimeout(()=>LAYER_REGISTRY.SATELLITE.refresh(),3200);
-  return {refresh:()=>LAYER_REGISTRY.SATELLITE.refresh()};
+  LOG.add('[SAT] v6 — Celestrak group fetch · real satellites · SGP4', 'sig');
+  UI.setStatus('satellite', 'LOADING', 'warn');
+  _loadAll();
+  // Refresh TLEs every 2 hours
+  setInterval(() => {
+    Object.keys(_groupCache).forEach(k => delete _groupCache[k]);
+    _sats.clear();
+    LAYER_REGISTRY.SATELLITE.entities.entities.removeAll();
+    if (_tickTimer) { clearInterval(_tickTimer); _tickTimer = null; }
+    _loadAll();
+  }, 7_200_000);
 
 })(); // END SATELLITE_MODULE
 

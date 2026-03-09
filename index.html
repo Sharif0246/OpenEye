@@ -2240,24 +2240,24 @@ const AVIATION_MODULE = (() => {
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  MARITIME_MODULE  —  v5  AISSTREAM WEBSOCKET                ║
-// ║  Real AIS data — WebSocket bypasses CORS entirely           ║
-// ║  Progressive render — shows ships as they arrive            ║
+// ║  MARITIME_MODULE  —  v6  AISSTREAM WEBSOCKET                ║
+// ║  Render immediately on PositionReport — no snapshot wait    ║
+// ║  ShipStaticData updates label when it arrives               ║
 // ╚══════════════════════════════════════════════════════════════╝
 const MARITIME_MODULE = (() => {
 
   const AISSTREAM_KEY = '6f8d4921ef79798d5db5949081861588deacc208';
 
   const CLS_STYLE = {
-    CARGO:     { color:'#00ff9d', label:'CARGO',    tag:'tag-ship' },
-    TANKER:    { color:'#ff3c3c', label:'TANKER',   tag:'tag-warn' },
-    NAVAL:     { color:'#00d4ff', label:'NAVAL',    tag:'tag-mil'  },
-    PASSENGER: { color:'#ffe600', label:'PASS',     tag:'tag-air'  },
-    FISHING:   { color:'#b44fff', label:'FISHING',  tag:'tag-ship' },
-    TUG:       { color:'#ff9900', label:'TUG',      tag:'tag-ship' },
-    HIGHSPEED: { color:'#ff9900', label:'FAST',     tag:'tag-air'  },
-    SAR:       { color:'#ff3c3c', label:'SAR',      tag:'tag-warn' },
-    OTHER:     { color:'#44ffcc', label:'OTHER',    tag:'tag-ship' },
+    CARGO:     { color:'#00ff9d', label:'CARGO',   tag:'tag-ship' },
+    TANKER:    { color:'#ff3c3c', label:'TANKER',  tag:'tag-warn' },
+    NAVAL:     { color:'#00d4ff', label:'NAVAL',   tag:'tag-mil'  },
+    PASSENGER: { color:'#ffe600', label:'PASS',    tag:'tag-air'  },
+    FISHING:   { color:'#b44fff', label:'FISHING', tag:'tag-ship' },
+    TUG:       { color:'#ff9900', label:'TUG',     tag:'tag-ship' },
+    HIGHSPEED: { color:'#ff9900', label:'FAST',    tag:'tag-air'  },
+    SAR:       { color:'#ff3c3c', label:'SAR',     tag:'tag-warn' },
+    OTHER:     { color:'#44ffcc', label:'OTHER',   tag:'tag-ship' },
   };
 
   const NAV_STATUS = [
@@ -2300,11 +2300,13 @@ const MARITIME_MODULE = (() => {
   // ── Ship icon canvas ──────────────────────────────────────────
   const _iconCache = {};
   function _makeShipIcon(cls, heading) {
-    const SZ=36, c=document.createElement('canvas'); c.width=c.height=SZ;
+    const SZ=36, c=document.createElement('canvas');
+    c.width=c.height=SZ;
     const ctx=c.getContext('2d');
     const col = CLS_STYLE[cls]?.color || '#44ffcc';
     ctx.save(); ctx.translate(SZ/2,SZ/2); ctx.rotate((heading||0)*Math.PI/180);
-    ctx.shadowColor=col; ctx.shadowBlur=10; ctx.fillStyle=col; ctx.strokeStyle=col; ctx.lineWidth=1;
+    ctx.shadowColor=col; ctx.shadowBlur=10;
+    ctx.fillStyle=col; ctx.strokeStyle=col; ctx.lineWidth=1;
     if (cls==='NAVAL') {
       ctx.beginPath(); ctx.moveTo(0,-14); ctx.lineTo(5,-4); ctx.lineTo(5,8);
       ctx.lineTo(3,12); ctx.lineTo(-3,12); ctx.lineTo(-5,8); ctx.lineTo(-5,-4);
@@ -2325,28 +2327,106 @@ const MARITIME_MODULE = (() => {
   }
   function _getIcon(cls, heading) {
     const b=Math.round((heading||0)/10)*10, k=`${cls}_${b}`;
-    if (!_iconCache[k]) _iconCache[k]=_makeShipIcon(cls,b); return _iconCache[k];
+    if (!_iconCache[k]) _iconCache[k]=_makeShipIcon(cls,b);
+    return _iconCache[k];
   }
 
-  // ── Vessel store ──────────────────────────────────────────────
-  const _vessels = new Map();   // mmsi → vessel data
+  // ── State ─────────────────────────────────────────────────────
+  const _vessels     = new Map();   // mmsi → vessel data
   const _navalAlerted = new Set();
   const _chopkAlerted = new Set();
-  let   _ws = null, _drTimer = null, _renderTimer = null;
-  let   _msgCount = 0;
+  let   _ws          = null;
+  let   _drTimer     = null;
+  let   _statsTimer  = null;
+  let   _totalRendered = 0;
 
-  // ── Dead-reckoning — 5s smooth ship movement ─────────────────
+  // ── Add or update a single vessel entity on the globe ─────────
+  // Called immediately on every PositionReport — no waiting.
+  function _upsertEntity(mmsi, v) {
+    const layer = LAYER_REGISTRY.MARITIME;
+    const cls   = _classify(v);
+    const style = CLS_STYLE[cls] || CLS_STYLE.OTHER;
+    const col   = style.color;
+    const label = v.name || `VESSEL·${mmsi}`;
+    const icon  = _getIcon(cls, v.heading || v.cog || 0);
+
+    // Chokepoint alert — once per zone
+    const zone = CHOKEPOINTS.find(z =>
+      v.lat >= z.latMin && v.lat <= z.latMax &&
+      v.lon >= z.lonMin && v.lon <= z.lonMax);
+    if (zone && !_chopkAlerted.has(zone.name)) {
+      _chopkAlerted.add(zone.name);
+      LOG.add(`[SHIP] Traffic detected — ${zone.name}`, 'warn');
+    }
+
+    // Naval alert — once per vessel
+    if (cls === 'NAVAL' && !_navalAlerted.has(mmsi)) {
+      _navalAlerted.add(mmsi);
+      LOG.add(`[SIGINT] NAVAL — ${label}`, 'warn');
+    }
+
+    let entity = layer.entities.entities.getById(mmsi);
+
+    if (!entity) {
+      // First time we see this vessel — create entity
+      entity = layer.entities.entities.add({
+        id: mmsi,
+        position: Cesium.Cartesian3.fromDegrees(v.lon, v.lat, 1),
+        billboard: {
+          image: icon,
+          width:  cls==='NAVAL' ? 30 : 24,
+          height: cls==='NAVAL' ? 30 : 24,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          scaleByDistance: new Cesium.NearFarScalar(50_000, 1.4, 6_000_000, 0.15),
+          translucencyByDistance: new Cesium.NearFarScalar(80_000, 1.0, 8_000_000, 0.3),
+          disableDepthTestDistance: 500,
+        },
+        label: {
+          text: label,
+          font: '10px Share Tech Mono, monospace',
+          fillColor: Cesium.Color.fromCssColorString(col),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -20),
+          scaleByDistance: new Cesium.NearFarScalar(50_000, 1.0, 1_500_000, 0.0),
+          disableDepthTestDistance: 500,
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
+          backgroundPadding: new Cesium.Cartesian2(3, 2),
+        },
+      });
+      _totalRendered++;
+    } else {
+      // Already exists — update position and icon
+      entity.position = Cesium.Cartesian3.fromDegrees(v.lon, v.lat, 1);
+      entity.billboard.image = icon;
+      // Update label if we now have a real name
+      if (v.name && entity.label.text._value === `VESSEL·${mmsi}`) {
+        entity.label.text = new Cesium.ConstantProperty(v.name);
+      }
+    }
+
+    entity._oeData = { ...v, type:'ship', classification: cls };
+    v._lastTick = Date.now();
+  }
+
+  // ── Dead-reckoning — smooth ship movement between AIS updates ─
   function _drUpdate() {
     const now = Date.now();
     _vessels.forEach((v, mmsi) => {
-      if (!v.sog || v.sog < 0.3 || !v._lastTick) { v._lastTick=now; return; }
-      const dt=(now-v._lastTick)/1000; v._lastTick=now;
-      const spdMs=v.sog*0.514444, distM=spdMs*dt, R=6371000;
-      const hdgRad=(v.cog||0)*Math.PI/180, latRad=v.lat*Math.PI/180;
-      v.lat += (distM/R)*(180/Math.PI)*Math.cos(hdgRad);
-      v.lon += (distM/R)*(180/Math.PI)/Math.cos(latRad)*Math.sin(hdgRad);
-      v.lat = Math.max(-89, Math.min(89, v.lat));
-      v.lon = ((v.lon+540)%360)-180;
+      if (!v.sog || v.sog < 0.3 || !v._lastTick || !v.lat || !v.lon) return;
+      const dt = (now - v._lastTick) / 1000;
+      v._lastTick = now;
+      const spdMs  = v.sog * 0.514444;
+      const distM  = spdMs * dt;
+      const R      = 6371000;
+      const hdgRad = (v.cog || 0) * Math.PI / 180;
+      const latRad = v.lat * Math.PI / 180;
+      v.lat += (distM / R) * (180 / Math.PI) * Math.cos(hdgRad);
+      v.lon += (distM / R) * (180 / Math.PI) / Math.cos(latRad) * Math.sin(hdgRad);
+      v.lat  = Math.max(-89, Math.min(89, v.lat));
+      v.lon  = ((v.lon + 540) % 360) - 180;
       const entity = LAYER_REGISTRY.MARITIME.entities.entities.getById(mmsi);
       if (entity && isFinite(v.lat) && isFinite(v.lon)) {
         try {
@@ -2357,206 +2437,149 @@ const MARITIME_MODULE = (() => {
     });
   }
 
-  // ── Render snapshot — upsert entities ────────────────────────
-  const _alreadyRendered = new Set();
-
-  function _renderSnapshot() {
-    const layer = LAYER_REGISTRY.MARITIME;
-    const withPos = [..._vessels.values()].filter(v =>
-      v.lat && v.lon && isFinite(v.lat) && isFinite(v.lon));
-
-    if (withPos.length === 0) {
-      LOG.add('[MARITIME] No vessels with position yet — waiting...', 'warn');
-      return;
-    }
-
-    let navalCount=0; const feedItems=[];
-
-    withPos.forEach(v => {
-      const cls   = _classify(v);
-      const style = CLS_STYLE[cls] || CLS_STYLE.OTHER;
-      const col   = style.color;
-
-      // Naval alert
-      if (cls==='NAVAL' && !_navalAlerted.has(v.mmsi)) {
-        _navalAlerted.add(v.mmsi);
-        navalCount++;
-        LOG.add(`[SIGINT] NAVAL — ${v.name||v.mmsi}`, 'warn');
-      }
-
-      // Chokepoint alert
-      const zone = CHOKEPOINTS.find(z =>
-        v.lat>=z.latMin && v.lat<=z.latMax && v.lon>=z.lonMin && v.lon<=z.lonMax);
-      if (zone && !_chopkAlerted.has(zone.name)) {
-        _chopkAlerted.add(zone.name);
-        LOG.add(`[SHIP] Traffic — ${zone.name}`, 'warn');
-      }
-
-      v._lastTick = Date.now();
-
-      // Upsert entity — update if exists, add if new
-      let entity = layer.entities.entities.getById(v.mmsi);
-      if (!entity) {
-        entity = layer.entities.entities.add({
-          id: v.mmsi,
-          position: Cesium.Cartesian3.fromDegrees(v.lon, v.lat, 1),
-          billboard: {
-            image: _getIcon(cls, v.heading||v.cog||0),
-            width:  cls==='NAVAL'?30:24,
-            height: cls==='NAVAL'?30:24,
-            verticalOrigin: Cesium.VerticalOrigin.CENTER,
-            scaleByDistance: new Cesium.NearFarScalar(50_000,1.4,6_000_000,0.15),
-            translucencyByDistance: new Cesium.NearFarScalar(80_000,1.0,8_000_000,0.3),
-            disableDepthTestDistance: 500,
-          },
-          label: {
-            text: v.name || v.mmsi,
-            font: '10px Share Tech Mono, monospace',
-            fillColor: Cesium.Color.fromCssColorString(col),
-            outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-            pixelOffset: new Cesium.Cartesian2(0,-20),
-            scaleByDistance: new Cesium.NearFarScalar(50_000,1.0,1_500_000,0.0),
-            disableDepthTestDistance: 500,
-            showBackground: true,
-            backgroundColor: Cesium.Color.fromCssColorString('#020408').withAlpha(0.65),
-            backgroundPadding: new Cesium.Cartesian2(3,2),
-          },
-        });
-      } else {
-        // Update position and icon for existing entity
-        entity.position = Cesium.Cartesian3.fromDegrees(v.lon, v.lat, 1);
-        entity.billboard.image = _getIcon(cls, v.heading||v.cog||0);
-      }
-
-      entity._oeData = { ...v, type:'ship', classification:cls };
-
-      feedItems.push({
-        type:'ship', name: v.name||v.mmsi,
-        sub: `${v.destination||'?'} · ${v.sog!=null?v.sog.toFixed(1)+'kn':'?'} · ${style.label}`,
-        color: col, tag: style.tag, tagLabel: style.label,
-        lat: v.lat, lon: v.lon, feedAlt: 120_000,
-      });
-    });
-
-    // Remove entities for vessels that are no longer in our store
-    [...layer.entities.entities.values]
-      .filter(e => e.id && !_vessels.has(e.id))
-      .forEach(e => layer.entities.entities.remove(e));
-
-    layer.count = withPos.length;
+  // ── Status bar update — runs every 5s ─────────────────────────
+  function _updateStats() {
+    const count = _vessels.size;
+    if (count === 0) return;
+    LAYER_REGISTRY.MARITIME.count = count;
     LAYER_REGISTRY._sync('MARITIME');
-    UI.renderFeed(feedItems);
-    LOG.add(`[MARITIME] ${withPos.length} vessels · ${navalCount} naval`, 'ship');
-    UI.setStatus('maritime', `LIVE · ${withPos.length}`, 'ok');
-    document.getElementById('sb-ships').innerHTML = `VESSELS <span>${withPos.length}</span>`;
+    UI.setStatus('maritime', `LIVE · ${count}`, 'ok');
+    document.getElementById('sb-ships').innerHTML = `VESSELS <span>${count}</span>`;
   }
 
   // ── AISStream WebSocket ───────────────────────────────────────
   function _connect() {
-    if (_ws && (_ws.readyState===WebSocket.OPEN||_ws.readyState===WebSocket.CONNECTING)) return;
+    if (_ws && (_ws.readyState === WebSocket.OPEN ||
+                _ws.readyState === WebSocket.CONNECTING)) return;
 
     LOG.add('[MARITIME] Connecting AISStream...', 'sys');
     UI.setStatus('maritime', 'CONNECTING', 'warn');
 
-    _ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
+    try {
+      _ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
+    } catch(e) {
+      LOG.add('[MARITIME] WebSocket create failed — retry 15s', 'warn');
+      setTimeout(_connect, 15000);
+      return;
+    }
 
     _ws.onopen = () => {
-      LOG.add('[MARITIME] AISStream connected — global feed active', 'sig');
+      LOG.add('[MARITIME] AISStream connected — subscribing global feed', 'sig');
       UI.setStatus('maritime', 'STREAMING', 'ok');
 
-      // Subscribe to global bounding box
       _ws.send(JSON.stringify({
-        APIKey: AISSTREAM_KEY,
-        BoundingBoxes: [[[-90, -180], [90, 180]]],
+        APIKey:             AISSTREAM_KEY,
+        BoundingBoxes:      [[[-90, -180], [90, 180]]],
         FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
       }));
 
-      // First render at 20s — give WebSocket time to accumulate vessels
-      setTimeout(() => {
-        LOG.add(`[MARITIME] Initial render — ${_vessels.size} vessels buffered`, 'sys');
-        _renderSnapshot();
-      }, 20000);
-
-      // Then refresh every 20s
-      if (_renderTimer) clearInterval(_renderTimer);
-      _renderTimer = setInterval(_renderSnapshot, 20000);
-
-      // Dead-reckoning every 5s
-      if (_drTimer) clearInterval(_drTimer);
-      _drTimer = setInterval(_drUpdate, 5000);
+      // Start dead-reckoning and stats update
+      if (_drTimer)    clearInterval(_drTimer);
+      if (_statsTimer) clearInterval(_statsTimer);
+      _drTimer    = setInterval(_drUpdate,    5000);
+      _statsTimer = setInterval(_updateStats, 5000);
     };
 
     _ws.onmessage = (evt) => {
       try {
         const msg  = JSON.parse(evt.data);
-        const mmsi = String(msg.MetaData?.MMSI || '');
+        const mmsi = String(
+          msg.MetaData?.MMSI ||
+          msg.Message?.PositionReport?.UserID ||
+          msg.Message?.ShipStaticData?.UserID || ''
+        );
         if (!mmsi) return;
-        _msgCount++;
 
-        // Update status counter every 100 messages
-        if (_msgCount % 100 === 0) {
-          UI.setStatus('maritime', `BUFFERING · ${_vessels.size}`, 'warn');
-        }
-
+        // ── PositionReport — render IMMEDIATELY ─────────────────
         if (msg.Message?.PositionReport) {
           const pr  = msg.Message.PositionReport;
           const lat = parseFloat(pr.Latitude  || 0);
           const lon = parseFloat(pr.Longitude || 0);
-          if (!isFinite(lat)||!isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return;
-          if (lat===0 && lon===0) return;
-          _vessels.set(mmsi, {
-            ...(_vessels.get(mmsi) || {}),
-            mmsi, lat, lon,
+
+          // Validate coordinates
+          if (!isFinite(lat) || !isFinite(lon)) return;
+          if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+          if (lat === 0 && lon === 0) return;
+
+          // Merge with existing vessel data (preserves name if already known)
+          const existing = _vessels.get(mmsi) || {};
+          const updated  = {
+            ...existing,
+            mmsi,
+            lat,
+            lon,
             sog:     parseFloat(pr.Sog || 0),
             cog:     parseFloat(pr.Cog || 0),
             heading: parseFloat(pr.TrueHeading || pr.Cog || 0),
             status:  parseInt(pr.NavigationalStatus || 15),
             source:  'AISStream',
             _ts:     Date.now(),
-          });
+          };
+          _vessels.set(mmsi, updated);
+
+          // ← KEY FIX: render right now, don't wait for snapshot
+          _upsertEntity(mmsi, updated);
         }
 
+        // ── ShipStaticData — update label when it arrives ────────
         if (msg.Message?.ShipStaticData) {
-          const sd = msg.Message.ShipStaticData;
-          _vessels.set(mmsi, {
-            ...(_vessels.get(mmsi) || {}),
+          const sd   = msg.Message.ShipStaticData;
+          const name = (sd.Name || '').trim();
+          if (!name || name === 'UNKNOWN' || name.length < 2) return;
+
+          const existing = _vessels.get(mmsi) || { mmsi };
+          const updated  = {
+            ...existing,
             mmsi,
-            name:        (sd.Name        || 'UNKNOWN').trim(),
+            name,
             callsign:    (sd.CallSign    || '').trim(),
             shipType:    parseInt(sd.Type || 0),
             destination: (sd.Destination || '').trim(),
             draught:     parseFloat(sd.MaximumStaticDraught || 0) || null,
             source:      'AISStream',
-          });
+          };
+          _vessels.set(mmsi, updated);
+
+          // Update entity label if it exists on the globe
+          const entity = LAYER_REGISTRY.MARITIME.entities.entities.getById(mmsi);
+          if (entity) {
+            try {
+              entity.label.text = new Cesium.ConstantProperty(name);
+              entity._oeData = { ...entity._oeData, ...updated };
+            } catch(e) {}
+          }
+          // If no entity yet (static data arrived before position) — vessel
+          // is already in _vessels map, will be rendered on next PositionReport
         }
-      } catch(e) {}
+
+      } catch(e) { /* silently ignore malformed messages */ }
     };
 
-    _ws.onerror = () => {
+    _ws.onerror = (e) => {
       LOG.add('[MARITIME] AISStream error', 'warn');
       UI.setStatus('maritime', 'ERROR', 'err');
     };
 
     _ws.onclose = () => {
-      LOG.add('[MARITIME] AISStream closed — reconnect in 30s', 'warn');
+      LOG.add('[MARITIME] AISStream closed — reconnect in 15s', 'warn');
       UI.setStatus('maritime', 'RECONNECTING', 'warn');
-      if (_drTimer)     { clearInterval(_drTimer);     _drTimer=null; }
-      if (_renderTimer) { clearInterval(_renderTimer); _renderTimer=null; }
+      if (_drTimer)    { clearInterval(_drTimer);    _drTimer=null; }
+      if (_statsTimer) { clearInterval(_statsTimer); _statsTimer=null; }
       _ws = null;
-      setTimeout(_connect, 30000);
+      setTimeout(_connect, 15000);
     };
   }
 
+  // ── Detail panel renderer ─────────────────────────────────────
   DETAIL_RENDERERS['ship'] = (d) => {
     const style  = CLS_STYLE[d.classification] || CLS_STYLE.OTHER;
     const col    = style.color;
     const navSt  = NAV_STATUS[d.status] || 'Unknown';
     const sogKts = d.sog != null ? `${d.sog.toFixed(1)} kts` : '—';
     const sogKmh = d.sog != null ? `(${(d.sog*1.852).toFixed(0)} km/h)` : '';
-    const icon   = d.classification==='NAVAL'?'⚓':d.classification==='TANKER'?'⚠':'📦';
+    const icon   = d.classification==='NAVAL' ? '⚓' : d.classification==='TANKER' ? '⚠' : '📦';
     return `
-      <div class="detail-name" style="color:${col}">${d.name||'UNKNOWN'}</div>
+      <div class="detail-name" style="color:${col}">${d.name || d.mmsi || 'UNKNOWN'}</div>
       <span class="detail-badge" style="color:${col};border:1px solid ${col}44;background:${col}11">${icon} ${style.label}</span>
       <div class="detail-grid" style="margin-top:6px">
         <div><div class="dg-cell-label">MMSI</div><div class="dg-cell-value">${d.mmsi||'—'}</div></div>
@@ -2564,17 +2587,21 @@ const MARITIME_MODULE = (() => {
         <div><div class="dg-cell-label">Speed</div><div class="dg-cell-value">${sogKts} ${sogKmh}</div></div>
         <div><div class="dg-cell-label">Course</div><div class="dg-cell-value">${d.cog!=null?Math.round(d.cog)+'°':'—'}</div></div>
         <div><div class="dg-cell-label">Destination</div><div class="dg-cell-value">${d.destination||'—'}</div></div>
-        <div><div class="dg-cell-label">Nav Status</div><div class="dg-cell-value" style="font-size:0.5rem">${navSt}</div></div>
+        <div><div class="dg-cell-label">Nav Status</div><div class="dg-cell-value">${navSt}</div></div>
         <div><div class="dg-cell-label">Draught</div><div class="dg-cell-value">${d.draught?d.draught+'m':'—'}</div></div>
         <div><div class="dg-cell-label">Source</div><div class="dg-cell-value">AISStream WS</div></div>
       </div>`;
   };
 
   LAYER_REGISTRY.MARITIME.refresh = async function() {
-    if (_vessels.size > 0) _renderSnapshot();
+    // Re-render all vessels with known positions
+    _vessels.forEach((v, mmsi) => {
+      if (v.lat && v.lon) _upsertEntity(mmsi, v);
+    });
   };
 
-  LOG.add('[MARITIME] v5 — AISStream WebSocket (20s first render)', 'ship');
+  // ── Boot ──────────────────────────────────────────────────────
+  LOG.add('[MARITIME] v6 — immediate render on PositionReport', 'ship');
   UI.setStatus('maritime', 'LOADING', 'warn');
   _connect();
   return { refresh: () => LAYER_REGISTRY.MARITIME.refresh() };

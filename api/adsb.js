@@ -1,80 +1,63 @@
-// api/adsb.js — Vercel Serverless Function
-// Fetches 8 regional 250NM zones + military via RapidAPI ADS-B Exchange.
-// Server-to-server — RapidAPI explicitly supports this. No CORS block.
+// api/adsb.js — Vercel Serverless Proxy → OpenSky Network
+// Server-to-server call with Basic Auth — bypasses all CORS restrictions.
+// OpenSky registered account: higher rate limit, global snapshot up to 15,000 flights.
 
-const RAPIDAPI_KEY  = '70603dc003msh9b3a27ff6cf425ap1453e0jsn51f9f2226e66';
-const RAPIDAPI_HOST = 'adsbexchange-com1.p.rapidapi.com';
-
-// 8 hubs × 250NM radius covers ~85% of global commercial airspace
-const HUBS = [
-  { name:'NATL',  lat: 40.0, lon: -74.0 },  // New York / North Atlantic
-  { name:'EURO',  lat: 51.5, lon:   0.0 },  // London / Europe
-  { name:'GULF',  lat: 25.0, lon:  55.0 },  // Dubai / Gulf
-  { name:'SEAS',  lat:  1.3, lon: 104.0 },  // Singapore / SE Asia
-  { name:'JPKR',  lat: 35.7, lon: 139.7 },  // Tokyo / NE Asia
-  { name:'SAAM',  lat:-23.5, lon: -46.6 },  // São Paulo / S America
-  { name:'AUSN',  lat:-33.9, lon: 151.2 },  // Sydney / Oceania
-  { name:'AFME',  lat: -1.3, lon:  36.8 },  // Nairobi / Africa
-];
-
-const HEADERS = {
-  'x-rapidapi-key':  RAPIDAPI_KEY,
-  'x-rapidapi-host': RAPIDAPI_HOST,
-};
-
-async function fetchHub(hub) {
-  const url = `https://adsbexchange-com1.p.rapidapi.com/v2/lat/${hub.lat}/lon/${hub.lon}/dist/250/`;
-  const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(12000) });
-  if (!res.ok) throw new Error(`Hub ${hub.name}: HTTP ${res.status}`);
-  const json = await res.json();
-  return (json.ac || []).map(ac => ({ ...ac, _hub: hub.name }));
-}
-
-async function fetchMilitary() {
-  const url = 'https://adsbexchange-com1.p.rapidapi.com/v2/mil/';
-  const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(12000) });
-  if (!res.ok) throw new Error(`Military: HTTP ${res.status}`);
-  const json = await res.json();
-  return (json.ac || []).map(ac => ({ ...ac, _mil: true }));
-}
+const OPENSKY_USER = 'sharifopeneye';
+const OPENSKY_PASS = 'Sharifopeneye0246';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=10');
+  res.setHeader('Cache-Control', 's-maxage=10, stale-while-revalidate=5');
 
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
   try {
-    // All hubs + military in parallel
-    const results = await Promise.allSettled([
-      ...HUBS.map(fetchHub),
-      fetchMilitary(),
-    ]);
+    const auth = Buffer.from(`${OPENSKY_USER}:${OPENSKY_PASS}`).toString('base64');
 
-    // Deduplicate by ICAO24 hex — military entry wins over civilian
-    const seen = new Map();
-    let ok = 0, fail = 0;
-
-    results.forEach(r => {
-      if (r.status === 'fulfilled') {
-        ok++;
-        r.value.forEach(ac => {
-          const key = (ac.hex || '').toLowerCase().trim();
-          if (!key) return;
-          if (!seen.has(key) || ac._mil) seen.set(key, ac);
-        });
-      } else {
-        fail++;
-        console.error('Hub failed:', r.reason?.message);
-      }
+    const response = await fetch('https://opensky-network.org/api/states/all', {
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'User-Agent': 'OpenEyeOSINT/1.0',
+      },
+      signal: AbortSignal.timeout(20000),
     });
 
-    const ac = Array.from(seen.values());
-    res.status(200).json({ ac, total: ac.length, now: Date.now()/1000, ok, fail });
+    if (!response.ok) throw new Error(`OpenSky HTTP ${response.status}`);
+
+    const data = await response.json();
+
+    const states = (data.states || [])
+      .filter(s =>
+        s[5] != null && s[6] != null &&
+        !s[8] &&
+        Math.abs(s[6]) <= 90 &&
+        Math.abs(s[5]) <= 180
+      )
+      .map(s => ({
+        icao24:   s[0] || '',
+        callsign: (s[1] || '').trim(),
+        country:  s[2] || '?',
+        lon:      s[5],
+        lat:      s[6],
+        altitude: s[7] || s[13] || 1000,
+        onGround: false,
+        velocity: s[9] != null ? Math.round(s[9] * 3.6) : null,
+        heading:  s[10] || 0,
+        vrate:    s[11] != null ? Math.round(s[11]) : null,
+        squawk:   s[14] || null,
+        category: s[17] || 0,
+      }));
+
+    res.status(200).json({
+      states,
+      total:  states.length,
+      time:   data.time || Math.floor(Date.now() / 1000),
+    });
 
   } catch (err) {
-    res.status(502).json({ error: err.message, ac: [], total: 0 });
+    console.error('OpenSky proxy error:', err.message);
+    res.status(502).json({ error: err.message, states: [], total: 0 });
   }
 }

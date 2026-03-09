@@ -20,14 +20,17 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
-  const group = (req.query.group || '').toLowerCase().trim();
+  const group = (req.query.group || '').trim();
+  const groupLower = group.toLowerCase();
+  // Find the actual group name case-insensitively
+  const actualGroup = [...ALLOWED_GROUPS].find(g => g.toLowerCase() === groupLower) || group;
 
-  if (!group || !ALLOWED_GROUPS.has(group)) {
+  if (!group || !ALLOWED_GROUPS.has(actualGroup)) {
     return res.status(400).json({ error: `Unknown group: "${group}"` });
   }
 
   try {
-    const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=JSON`;
+    const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${actualGroup}&FORMAT=JSON`;
 
     const response = await fetch(url, {
       headers: {

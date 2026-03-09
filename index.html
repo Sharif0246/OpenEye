@@ -934,41 +934,25 @@ async function LOAD_MAP() {
     scene.globe.showGroundAtmosphere = true;
     scene.globe.baseColor            = Cesium.Color.fromCssColorString('#020408');
 
-    // Primary: Bing Maps Aerial — free, no quota, high-res satellite
+    // Primary: ESRI World Imagery — free satellite tiles, no auth needed
     scene.imageryLayers.removeAll();
     scene.imageryLayers.addImageryProvider(
-      new Cesium.UrlTemplateImageryProvider({
-        url: 'https://ecn.t{s}.tiles.virtualearth.net/tiles/a{quadkey}.jpeg?g=1',
-        subdomains: ['0','1','2','3'],
-        maximumLevel: 19,
-        credit: 'Bing Maps Aerial © Microsoft',
-        customTags: {
-          quadkey: (imageryProvider, x, y, level) => {
-            let quadkey = '';
-            for (let i = level; i > 0; i--) {
-              let digit = 0;
-              const mask = 1 << (i - 1);
-              if ((x & mask) !== 0) digit++;
-              if ((y & mask) !== 0) digit += 2;
-              quadkey += digit;
-            }
-            return quadkey;
-          }
-        }
+      new Cesium.ArcGisMapServerImageryProvider({
+        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
+        credit: 'Esri World Imagery',
       })
     );
 
     // Overlay: Esri labels/roads/borders on top
-    scene.imageryLayers.addImageryProvider(
-      new Cesium.UrlTemplateImageryProvider({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-        maximumLevel: 19,
+    const labelLayer = scene.imageryLayers.addImageryProvider(
+      new Cesium.ArcGisMapServerImageryProvider({
+        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer',
         credit: 'Esri Reference Labels',
-        alpha: 0.6,
       })
     );
+    labelLayer.alpha = 0.7;
 
-    LOG.add('[MAP] Bing Aerial + Esri labels — globe ONLINE', 'sig');
+    LOG.add('[MAP] Esri World Imagery — globe ONLINE', 'sig');
     UI.setStatus('globe', 'ONLINE', 'ok');
   } catch (err) {
     console.warn('Globe imagery failed:', err.message);
@@ -1075,7 +1059,13 @@ const LAYER_REGISTRY = {
     const layer = this[id];
     if (!layer) return;
     layer.enabled = !layer.enabled;
+    // Standard entity DataSource visibility
     layer.entities.show = layer.enabled;
+    // Aviation uses GPU PointPrimitiveCollection — must hide separately
+    if (id === 'AVIATION') {
+      if (window._aviationPoints)  window._aviationPoints.show  = layer.enabled;
+      if (window._aviationLabels)  window._aviationLabels.show  = layer.enabled;
+    }
     this._sync(id);
     LOG.add(
       `[LAYER] ${layer.label} ${layer.enabled ? 'ENABLED' : 'DISABLED'}`,
@@ -1893,11 +1883,13 @@ const AVIATION_MODULE = (() => {
       _pointCollection.removeAll();
     } else {
       _pointCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    window._aviationPoints = _pointCollection;
     }
     if (_labelCollection && !_labelCollection.isDestroyed()) {
       _labelCollection.removeAll();
     } else {
       _labelCollection = viewer.scene.primitives.add(new Cesium.LabelCollection());
+    window._aviationLabels = _labelCollection;
     }
     _pointIndex.clear();
     _flightData.clear();
